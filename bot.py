@@ -8,63 +8,80 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Словарь для хранения фильтров: { "слово": {"type": "gif", "file_id": "...", "text": "..."} }
+# Словарь для хранения фильтров
 FILTERS = {}
 
+# Функция для проверки, является ли пользователь администратором
+async def is_admin(message: types.Message) -> bool:
+    # В личных сообщениях с ботом проверка админства не нужна (или можно разрешить)
+    if message.chat.type == "private":
+        return True
+    
+    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    return member.status in ["creator"]
 
-# 1. Создание фильтра по команде /filter <слово>
+
+# 1. Создание фильтра (ТОЛЬКО для админов)
 @dp.message(Command("filter"))
 async def add_filter(message: types.Message, command: CommandObject):
-    # Проверка: команда должна быть отправлена в ответ на сообщение
-    if not message.reply_to_message:
-        await message.reply("Ответьте этой командой на сообщение, которое хотите привязать")
+    # Проверяем права
+    if not await is_admin(message):
+        await message.reply("❌ У вас нет прав администратора для создания фильтров!")
         return
 
-    # Проверка: передал ли пользователь ключевое слово
+    if not message.reply_to_message:
+        await message.reply("⚠️ Ответьте этой командой на сообщение/гифку/стикер/картинку, которую хотите привязать!")
+        return
+
     if not command.args:
-        await message.reply("Укажите ключевое слово после команды", parse_mode="Markdown")
+        await message.reply("⚠️ Укажите ключевое слово после команды.\nПример: `/filter привет`", parse_mode="Markdown")
         return
 
     trigger_word = command.args.strip().lower()
     reply = message.reply_to_message
 
-    # Определяем тип содержимого и сохраняем его
-    if reply.animation:  # GIF
+    # Сохраняем контент в словарь
+    if reply.animation:
         FILTERS[trigger_word] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.caption}
-    elif reply.sticker:  # Стикер
+    elif reply.sticker:
         FILTERS[trigger_word] = {"type": "sticker", "file_id": reply.sticker.file_id}
-    elif reply.photo:    # Картинка
+    elif reply.photo:
         FILTERS[trigger_word] = {"type": "photo", "file_id": reply.photo[-1].file_id, "caption": reply.caption}
-    elif reply.video:    # Видео
+    elif reply.video:
         FILTERS[trigger_word] = {"type": "video", "file_id": reply.video.file_id, "caption": reply.caption}
-    elif reply.voice:    # Голосовое сообщение
+    elif reply.voice:
         FILTERS[trigger_word] = {"type": "voice", "file_id": reply.voice.file_id}
-    elif reply.text:     # Обычный текст
+    elif reply.text:
         FILTERS[trigger_word] = {"type": "text", "text": reply.text}
     else:
         await message.reply("❌ Этот тип сообщений пока не поддерживается.")
         return
 
-    await message.reply(f"Фильтр на слово **'{trigger_word}'** успешно сохранен", parse_mode="Markdown")
+    await message.reply(f"✅ Фильтр на слово **'{trigger_word}'** успешно сохранен!", parse_mode="Markdown")
 
 
-# 2. Удаление фильтра по команде /stop <слово>
+# 2. Удаление фильтра (ТОЛЬКО для админов)
 @dp.message(Command("stop"))
 async def remove_filter(message: types.Message, command: CommandObject):
+    # Проверяем права
+    if not await is_admin(message):
+        await message.reply("❌ У вас нет прав администратора для удаления фильтров!")
+        return
+
     if not command.args:
-        await message.reply("Укажите слово, фильтр для которого нужно удалить", parse_mode="Markdown")
+        await message.reply("⚠️ Укажите слово, фильтр для которого нужно удалить.\nПример: `/stop привет`", parse_mode="Markdown")
         return
 
     trigger_word = command.args.strip().lower()
 
     if trigger_word in FILTERS:
         del FILTERS[trigger_word]
-        await message.reply(f"🗑Фильтр **'{trigger_word}'** удален", parse_mode="Markdown")
+        await message.reply(f"🗑️ Фильтр **'{trigger_word}'** удален!", parse_mode="Markdown")
     else:
-        await message.reply(f"Фильтр **'{trigger_word}'** не найден")
+        await message.reply(f"❓ Фильтр **'{trigger_word}'** не найден.")
 
 
-# 3. Список всех фильтров в чате
+# 3. Список всех фильтров (доступен всем участникам)
 @dp.message(Command("filters"))
 async def list_filters(message: types.Message):
     if not FILTERS:
@@ -72,20 +89,18 @@ async def list_filters(message: types.Message):
         return
 
     words = ", ".join([f"`{w}`" for w in FILTERS.keys()])
-    await message.reply(f"📜 **Активные фильтры:**\n{words}", parse_mode="Markdown")
+    await message.reply(f"📜 **Активные фильтры в чате:**\n{words}", parse_mode="Markdown")
 
 
-# 4. Проверка входящих сообщений на совпадение с фильтрами
+# 4. Проверка входящих сообщений (срабатывает для всех)
 @dp.message(F.text)
 async def check_filters(message: types.Message):
     text = message.text.lower()
 
-    # Ищем, есть ли ключевое слово в тексте сообщения
     for trigger_word, content in FILTERS.items():
         if trigger_word in text:
             content_type = content["type"]
 
-            # Отправляем нужный тип контента
             if content_type == "text":
                 await message.reply(content["text"])
             elif content_type == "animation":
@@ -99,12 +114,11 @@ async def check_filters(message: types.Message):
             elif content_type == "voice":
                 await message.reply_voice(voice=content["file_id"])
             
-            # Прерываем цикл, чтобы не срабатывало сразу несколько фильтров
             break
 
 
 async def main():
-    print("Бот запущен с поддержкой фильтров!")
+    print("Бот запущен с защищенными фильтрами!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
