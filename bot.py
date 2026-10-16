@@ -13,7 +13,7 @@ FILTERS = {}
 
 # Функция для проверки, является ли пользователь администратором
 async def is_admin(message: types.Message) -> bool:
-    # В личных сообщениях с ботом проверка админства не нужна (или можно разрешить)
+    # В личных сообщениях проверка админства не требуется
     if message.chat.type == "private":
         return True
     
@@ -24,7 +24,6 @@ async def is_admin(message: types.Message) -> bool:
 # 1. Создание фильтра (ТОЛЬКО для админов)
 @dp.message(Command("filter"))
 async def add_filter(message: types.Message, command: CommandObject):
-    # Проверяем права
     if not await is_admin(message):
         await message.reply("❌ У вас нет прав администратора для создания фильтров!")
         return
@@ -63,7 +62,6 @@ async def add_filter(message: types.Message, command: CommandObject):
 # 2. Удаление фильтра (ТОЛЬКО для админов)
 @dp.message(Command("stop"))
 async def remove_filter(message: types.Message, command: CommandObject):
-    # Проверяем права
     if not await is_admin(message):
         await message.reply("❌ У вас нет прав администратора для удаления фильтров!")
         return
@@ -92,13 +90,23 @@ async def list_filters(message: types.Message):
     await message.reply(f"📜 **Активные фильтры в чате:**\n{words}", parse_mode="Markdown")
 
 
-# 4. Проверка входящих сообщений (срабатывает для всех)
+# 4. Проверка входящих сообщений (точное совпадение по словам)
 @dp.message(F.text)
 async def check_filters(message: types.Message):
-    text = message.text.lower()
+    text_lower = message.text.lower()
+    
+    # Разбиваем текст сообщения на отдельные слова по пробелам
+    words_in_message = text_lower.split()
 
     for trigger_word, content in FILTERS.items():
-        if trigger_word in text:
+        # Если триггер состоит из нескольких слов, ищем фразу целиком,
+        # если из одного — проверяем точное совпадение со словом из сообщения
+        if " " in trigger_word:
+            match_found = trigger_word in text_lower
+        else:
+            match_found = trigger_word in words_in_message
+
+        if match_found:
             content_type = content["type"]
 
             if content_type == "text":
@@ -118,8 +126,9 @@ async def check_filters(message: types.Message):
 
 
 async def main():
-    print("Бот запущен с защищенными фильтрами!")
+    print("Бот-модератор запущен и готов к работе...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+ 
