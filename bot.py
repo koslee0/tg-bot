@@ -4,8 +4,8 @@ import json
 import re
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, CommandObject
-from aiogram.types import ChatPermissions
+from aiogram.filters import Command, CommandObject, ChatMemberUpdatedFilter, JOIN_TRANSITION
+from aiogram.types import ChatPermissions, ChatMemberUpdated
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -313,13 +313,22 @@ async def clear_welcome(message: types.Message):
     else:
         await message.reply("❓ В этом чате не было установлено приветствие.")
 
+# 1. Детект входа участников через стандартное системное сообщение
 @dp.message(F.new_chat_members)
-async def greet_new_members(message: types.Message):
+async def greet_new_members_message(message: types.Message):
     chat_id = message.chat.id
     for member in message.new_chat_members:
         if member.is_bot:
             continue
         await send_welcome_msg(chat_id, member.first_name, target_message=message)
+
+# 2. Детект входа участников через событие изменения статуса (ChatMemberUpdated) — гарантирует 100% работу!
+@dp.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
+async def greet_new_members_event(event: ChatMemberUpdated):
+    user = event.new_chat_member.user
+    if user.is_bot:
+        return
+    await send_welcome_msg(event.chat.id, user.first_name)
 
 # ----------------- 4. МОДЕРАЦИЯ (БАНЫ, КИКИ, МУТЫ, ВАРНЫ) -----------------
 
@@ -368,7 +377,6 @@ async def kick_user(message: types.Message, command: CommandObject):
     reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
 
     try:
-        # Кик в Telegram: баним и сразу разбаниваем, чтобы пользователь был изгнан, но мог зайти по ссылке
         await bot.ban_chat_member(message.chat.id, target_id)
         await bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
 
@@ -512,6 +520,28 @@ async def warn_user(message: types.Message, command: CommandObject):
             msg_text += f"\n💬 Причина: {reason}"
         await message.reply(msg_text, parse_mode="Markdown")
 
+@dp.message(Command("unwarn"))
+async def unwarn_user(message: types.Message, command: CommandObject):
+    if not await is_bot_admin(message):
+        await message.reply("❌ У вас нет прав!")
+        return
+
+    target_id, target_name = await extract_target_user(message, command)
+    if not target_id:
+        await message.reply("⚠️ Ответьте на сообщение пользователя или укажите его ID для снятия варна!", parse_mode="Markdown")
+        return
+
+    chat_id = message.chat.id
+    current_warns = STORAGE["warns"].get(chat_id, {}).get(target_id, 0)
+
+    if current_warns > 0:
+        new_warns = current_warns - 1
+        STORAGE["warns"][chat_id][target_id] = new_warns
+        save_data()
+        await message.reply(f"✅ С пользователя **{target_name}** снято одно предупреждение! Текущий счет: **{new_warns}/3**.", parse_mode="Markdown")
+    else:
+        await message.reply(f"ℹ️ У пользователя **{target_name}** нет активных предупреждений.", parse_mode="Markdown")
+
 @dp.message(Command("warns"))
 async def check_warns(message: types.Message, command: CommandObject):
     chat_id = message.chat.id
@@ -582,7 +612,7 @@ async def check_filters(message: types.Message):
             elif content_type == "video":
                 await message.reply_video(video=content["file_id"], caption=content.get("caption"))
             elif content_type == "voice":
-                await message.reply_voice(video=content["file_id"])
+                await message.reply_voice(voice=content["file_id"])
             break
 
 async def main():
