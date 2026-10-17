@@ -49,10 +49,12 @@ async def is_bot_admin(message: types.Message) -> bool:
     
     chat_id = message.chat.id
     user_id = message.from_user.id
-    member = await bot.get_chat_member(chat_id, user_id)
-    
-    if member.status == "creator":
-        return True
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        if member.status == "creator":
+            return True
+    except Exception:
+        pass
 
     allowed_admins = STORAGE["bot_admins"].get(chat_id, [])
     if user_id in allowed_admins:
@@ -82,19 +84,20 @@ async def extract_target_user(message: types.Message, command: CommandObject):
         target = args[0]
         if target.isdigit():
             return int(target), f"ID {target}"
-        elif target.startswith("@"):
-            await message.reply("⚠️ Если пользователю не отвечают на сообщение, укажите его цифровой Telegram ID!")
-            return None, None
     return None, None
 
 # ----------------- 1. ВАЙТЛИСТ АДМИНОВ -----------------
 
 @dp.message(Command("botadmin"))
 async def add_bot_admin(message: types.Message, command: CommandObject):
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status != "creator" and message.chat.type != "private":
-        await message.reply("❌ Только создатель (владелец) группы может выдавать доступ к администрированию бота!")
-        return
+    try:
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status != "creator" and message.chat.type != "private":
+            await message.reply("❌ Только создатель (владелец) группы может выдавать доступ к администрированию бота!")
+            return
+    except Exception:
+        if message.chat.type != "private":
+            return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
@@ -115,10 +118,14 @@ async def add_bot_admin(message: types.Message, command: CommandObject):
 
 @dp.message(Command("unbotadmin"))
 async def remove_bot_admin(message: types.Message, command: CommandObject):
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status != "creator" and message.chat.type != "private":
-        await message.reply("❌ Только создатель группы может забирать доступ к боту!")
-        return
+    try:
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status != "creator" and message.chat.type != "private":
+            await message.reply("❌ Только создатель группы может забирать доступ к боту!")
+            return
+    except Exception:
+        if message.chat.type != "private":
+            return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
@@ -226,29 +233,32 @@ async def send_welcome_msg(chat_id: int, user_name: str, target_message: types.M
 
     content_type = welcome_data["type"]
 
-    if content_type == "text":
-        text = welcome_data["text"].format(name=user_name, first_name=user_name) if welcome_data.get("text") else f"Привет, {user_name}!"
-        if target_message:
-            await target_message.reply(text)
-        else:
-            await bot.send_message(chat_id, text)
-    elif content_type == "animation":
-        caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
-        if target_message:
-            await target_message.reply_animation(animation=welcome_data["file_id"], caption=caption)
-        else:
-            await bot.send_animation(chat_id, animation=welcome_data["file_id"], caption=caption)
-    elif content_type == "photo":
-        caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
-        if target_message:
-            await target_message.reply_photo(photo=welcome_data["file_id"], caption=caption)
-        else:
-            await bot.send_photo(chat_id, photo=welcome_data["file_id"], caption=caption)
-    elif content_type == "sticker":
-        if target_message:
-            await target_message.reply_sticker(sticker=welcome_data["file_id"])
-        else:
-            await bot.send_sticker(chat_id, sticker=welcome_data["file_id"])
+    try:
+        if content_type == "text":
+            text = welcome_data["text"].format(name=user_name, first_name=user_name) if welcome_data.get("text") else f"Привет, {user_name}!"
+            if target_message:
+                await target_message.reply(text)
+            else:
+                await bot.send_message(chat_id, text)
+        elif content_type == "animation":
+            caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
+            if target_message:
+                await target_message.reply_animation(animation=welcome_data["file_id"], caption=caption)
+            else:
+                await bot.send_animation(chat_id, animation=welcome_data["file_id"], caption=caption)
+        elif content_type == "photo":
+            caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
+            if target_message:
+                await target_message.reply_photo(photo=welcome_data["file_id"], caption=caption)
+            else:
+                await bot.send_photo(chat_id, photo=welcome_data["file_id"], caption=caption)
+        elif content_type == "sticker":
+            if target_message:
+                await target_message.reply_sticker(sticker=welcome_data["file_id"])
+            else:
+                await bot.send_sticker(chat_id, sticker=welcome_data["file_id"])
+    except Exception as e:
+        print(f"Ошибка при отправке приветствия: {e}")
     return True
 
 @dp.message(Command("setwelcome"))
@@ -258,7 +268,7 @@ async def set_welcome(message: types.Message):
         return
 
     if not message.reply_to_message:
-        await message.reply("⚠️ Ответьте этой командой на сообщение (текст/фото/гифка/стикер), которое будет приветствием!\n\n💡 *Совет:* Вы можете использовать `{name}` в тексте сообщения, чтобы бот обращался к пользователю по имени.", parse_mode="Markdown")
+        await message.reply("⚠️ Ответьте этой командой на сообщение (текст/фото/гифка/стикер), которое будет приветствием!\n\n💡 *Совет:* Вы можете использовать `{name}` в тексте сообщения.", parse_mode="Markdown")
         return
 
     chat_id = message.chat.id
@@ -311,7 +321,7 @@ async def greet_new_members(message: types.Message):
             continue
         await send_welcome_msg(chat_id, member.first_name, target_message=message)
 
-# ----------------- 4. МОДЕРАЦИЯ (БАНЫ, МУТЫ, ВАРНЫ) -----------------
+# ----------------- 4. МОДЕРАЦИЯ (БАНЫ, КИКИ, МУТЫ, ВАРНЫ) -----------------
 
 @dp.message(Command("ban"))
 async def ban_user(message: types.Message, command: CommandObject):
@@ -342,6 +352,32 @@ async def ban_user(message: types.Message, command: CommandObject):
         await message.reply(msg_text, parse_mode="Markdown")
     except Exception as e:
         await message.reply(f"❌ Не удалось забанить пользователя: {e}")
+
+@dp.message(Command("kick"))
+async def kick_user(message: types.Message, command: CommandObject):
+    if not await is_bot_admin(message):
+        await message.reply("❌ У вас нет прав модератора!")
+        return
+
+    target_id, target_name = await extract_target_user(message, command)
+    if not target_id:
+        await message.reply("⚠️ Ответьте на сообщение нарушителя или укажите его ID!\nПример: `/kick 123456789 Оффтоп`", parse_mode="Markdown")
+        return
+
+    args_list = command.args.split() if command.args else []
+    reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+
+    try:
+        # Кик в Telegram: баним и сразу разбаниваем, чтобы пользователь был изгнан, но мог зайти по ссылке
+        await bot.ban_chat_member(message.chat.id, target_id)
+        await bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
+
+        msg_text = f"👢 Пользователь **{target_name}** изгнан (кикнут) из чата!"
+        if reason:
+            msg_text += f"\n💬 Причина: {reason}"
+        await message.reply(msg_text, parse_mode="Markdown")
+    except Exception as e:
+        await message.reply(f"❌ Не удалось кикнуть пользователя: {e}")
 
 @dp.message(Command("unban"))
 async def unban_user(message: types.Message, command: CommandObject):
@@ -479,17 +515,13 @@ async def warn_user(message: types.Message, command: CommandObject):
 @dp.message(Command("warns"))
 async def check_warns(message: types.Message, command: CommandObject):
     chat_id = message.chat.id
-
-    # Проверяем, есть ли цель в аргументах или в реплае
     target_id, target_name = await extract_target_user(message, command)
 
     if target_id and target_id != message.from_user.id:
-        # Просмотр чужих варнов доступен только админам бота
         if not await is_bot_admin(message):
             await message.reply("❌ Вы можете просматривать только свои варны!")
             return
     else:
-        # Если цель не указана — проверяем варны вызвавшего пользователя
         target_id = message.from_user.id
         target_name = message.from_user.first_name
 
@@ -550,7 +582,7 @@ async def check_filters(message: types.Message):
             elif content_type == "video":
                 await message.reply_video(video=content["file_id"], caption=content.get("caption"))
             elif content_type == "voice":
-                await message.reply_voice(voice=content["file_id"])
+                await message.reply_voice(video=content["file_id"])
             break
 
 async def main():
