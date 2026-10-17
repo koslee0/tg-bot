@@ -191,6 +191,7 @@ async def add_filter(message: types.Message, command: CommandObject):
     if chat_id not in STORAGE["filters"]:
         STORAGE["filters"][chat_id] = {}
 
+    # Защитное сохранение: записываем только строковые file_id без лишнего мусора
     if reply.animation:
         STORAGE["filters"][chat_id][trigger_word] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.caption}
     elif reply.sticker:
