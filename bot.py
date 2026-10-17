@@ -42,6 +42,18 @@ def save_data():
 
 STORAGE = load_data()
 
+# Стандартные полные права участника чата без ограничений
+FULL_PERMISSIONS = ChatPermissions(
+    can_send_messages=True,
+    can_send_media_messages=True,
+    can_send_other_messages=True,
+    can_add_web_page_previews=True,
+    can_send_polls=True,
+    can_change_info=True,
+    can_invite_users=True,
+    can_pin_messages=True
+)
+
 # ----------------- ПРОВЕРКА ПРАВ -----------------
 async def is_bot_admin(message: types.Message) -> bool:
     if message.chat.type == "private":
@@ -313,7 +325,6 @@ async def clear_welcome(message: types.Message):
     else:
         await message.reply("❓ В этом чате не было установлено приветствие.")
 
-# 1. Детект входа участников через стандартное системное сообщение
 @dp.message(F.new_chat_members)
 async def greet_new_members_message(message: types.Message):
     chat_id = message.chat.id
@@ -322,7 +333,6 @@ async def greet_new_members_message(message: types.Message):
             continue
         await send_welcome_msg(chat_id, member.first_name, target_message=message)
 
-# 2. Детект входа участников через событие изменения статуса (ChatMemberUpdated) — гарантирует 100% работу!
 @dp.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
 async def greet_new_members_event(event: ChatMemberUpdated):
     user = event.new_chat_member.user
@@ -344,7 +354,7 @@ async def ban_user(message: types.Message, command: CommandObject):
         return
 
     args_list = command.args.split() if command.args else []
-    reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+    reason = " ".join(args_list[1:]) if len(args_list) > 1 and not message.reply_to_message else " ".join(args_list) if len(args_list) > 0 and message.reply_to_message else None
 
     try:
         await bot.ban_chat_member(message.chat.id, target_id)
@@ -374,7 +384,7 @@ async def kick_user(message: types.Message, command: CommandObject):
         return
 
     args_list = command.args.split() if command.args else []
-    reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+    reason = " ".join(args_list[1:]) if len(args_list) > 1 and not message.reply_to_message else " ".join(args_list) if len(args_list) > 0 and message.reply_to_message else None
 
     try:
         await bot.ban_chat_member(message.chat.id, target_id)
@@ -421,15 +431,27 @@ async def mute_user(message: types.Message, command: CommandObject):
         return
 
     args_list = command.args.split() if command.args else []
+    
+    # Определяем время и причину с учетом того, был ли использован reply или аргумент с ID
     time_arg = "1h"
     reason = None
 
-    if len(args_list) > 1:
-        if parse_time(args_list[1]):
-            time_arg = args_list[1]
-            reason = " ".join(args_list[2:]) if len(args_list) > 2 else None
-        else:
-            reason = " ".join(args_list[1:])
+    if message.reply_to_message:
+        if len(args_list) >= 1:
+            parsed = parse_time(args_list[0])
+            if parsed:
+                time_arg = args_list[0]
+                reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+            else:
+                reason = " ".join(args_list)
+    else:
+        if len(args_list) >= 2:
+            parsed = parse_time(args_list[1])
+            if parsed:
+                time_arg = args_list[1]
+                reason = " ".join(args_list[2:]) if len(args_list) > 2 else None
+            else:
+                reason = " ".join(args_list[1:])
 
     duration = parse_time(time_arg) or timedelta(hours=1)
     until_date = datetime.now() + duration
@@ -464,14 +486,9 @@ async def unmute_user(message: types.Message, command: CommandObject):
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
             user_id=target_id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_media_messages=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True
-            )
+            permissions=FULL_PERMISSIONS
         )
-        await message.reply(f"🔊 Пользователю **{target_name}** возвращен доступ к чату!", parse_mode="Markdown")
+        await message.reply(f"🔊 Пользователю **{target_name}** возвращен полный доступ к чату!", parse_mode="Markdown")
     except Exception as e:
         await message.reply(f"❌ Ошибка при снятии мута: {e}")
 
@@ -487,7 +504,7 @@ async def warn_user(message: types.Message, command: CommandObject):
         return
 
     args_list = command.args.split() if command.args else []
-    reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+    reason = " ".join(args_list[1:]) if len(args_list) > 1 and not message.reply_to_message else " ".join(args_list) if len(args_list) > 0 and message.reply_to_message else None
 
     chat_id = message.chat.id
     if chat_id not in STORAGE["warns"]:
@@ -538,6 +555,17 @@ async def unwarn_user(message: types.Message, command: CommandObject):
         new_warns = current_warns - 1
         STORAGE["warns"][chat_id][target_id] = new_warns
         save_data()
+        
+        # Если варны полностью снялись или уменьшились, возвращаем стандартные разрешения
+        try:
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=target_id,
+                permissions=FULL_PERMISSIONS
+            )
+        except Exception:
+            pass
+
         await message.reply(f"✅ С пользователя **{target_name}** снято одно предупреждение! Текущий счет: **{new_warns}/3**.", parse_mode="Markdown")
     else:
         await message.reply(f"ℹ️ У пользователя **{target_name}** нет активных предупреждений.", parse_mode="Markdown")
@@ -577,6 +605,15 @@ async def reset_warns(message: types.Message, command: CommandObject):
     if chat_id in STORAGE["warns"] and target_id in STORAGE["warns"][chat_id]:
         STORAGE["warns"][chat_id][target_id] = 0
         save_data()
+
+    try:
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=target_id,
+            permissions=FULL_PERMISSIONS
+        )
+    except Exception:
+        pass
 
     await message.reply(f"✅ Предупреждения пользователя **{target_name}** сброшены!", parse_mode="Markdown")
 
