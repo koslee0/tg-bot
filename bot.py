@@ -238,8 +238,9 @@ async def list_filters(message: types.Message):
         await message.reply("В этом чате пока нет активных фильтров.")
         return
 
-    # Стиль Розы: заголовок и фильтры столбиком с дефисами[cite: 3]
-    lines = ["Список фильтров в чате:", *[f"- {w}" for w in filters.keys()]]
+    # Сортировка по длине слова (сначала длинные, ниже короткие) + стиль Розы[cite: 3]
+    sorted_words = sorted(filters.keys(), key=lambda w: (-len(w), w))
+    lines = ["Список фильтров в чате:", *[f"- {w}" for w in sorted_words]]
     await message.reply("\n".join(lines))
 
 # ----------------- 3. ПРИВЕТСТВИЯ (WELCOME) -----------------
