@@ -191,7 +191,6 @@ async def add_filter(message: types.Message, command: CommandObject):
     if chat_id not in STORAGE["filters"]:
         STORAGE["filters"][chat_id] = {}
 
-    # Защитное сохранение: записываем только строковые file_id без лишнего мусора
     if reply.animation:
         STORAGE["filters"][chat_id][trigger_word] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.caption}
     elif reply.sticker:
@@ -239,8 +238,9 @@ async def list_filters(message: types.Message):
         await message.reply("В этом чате пока нет активных фильтров.")
         return
 
-    words = ", ".join([f"`{w}`" for w in filters.keys()])
-    await message.reply(f"📜 **Активные фильтры этого чата:**\n{words}", parse_mode="Markdown")
+    # Стиль Розы: заголовок и фильтры столбиком с дефисами[cite: 3]
+    lines = ["Список фильтров в чате:", *[f"- {w}" for w in filters.keys()]]
+    await message.reply("\n".join(lines))
 
 # ----------------- 3. ПРИВЕТСТВИЯ (WELCOME) -----------------
 
