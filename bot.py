@@ -17,15 +17,6 @@ DATA_DIR = "/app/data"
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(DATA_DIR, "storage.json")
 
-# Структура данных по умолчанию:
-# {
-#   "filters": { chat_id: { "word": content } },
-#   "bot_admins": { chat_id: [ user_id1, user_id2 ] },
-#   "welcomes": { chat_id: content },
-#   "warns": { chat_id: { user_id: count } },
-#   "bans": { chat_id: [ user_id1, user_id2 ] }
-# }
-
 def load_data():
     if os.path.exists(DB_FILE):
         try:
@@ -51,21 +42,18 @@ def save_data():
 
 STORAGE = load_data()
 
-# ----------------- ПРОВЕРКА ПРАВ (Итог: Создатель или Админ из Вайтлиста) -----------------
+# ----------------- ПРОВЕРКА ПРАВ -----------------
 async def is_bot_admin(message: types.Message) -> bool:
     if message.chat.type == "private":
         return True
     
     chat_id = message.chat.id
     user_id = message.from_user.id
-
     member = await bot.get_chat_member(chat_id, user_id)
     
-    # Владелец группы всегда имеет доступ
     if member.status == "creator":
         return True
 
-    # Проверка вайтлиста админов бота для этого чата
     allowed_admins = STORAGE["bot_admins"].get(chat_id, [])
     if user_id in allowed_admins:
         return True
@@ -73,7 +61,6 @@ async def is_bot_admin(message: types.Message) -> bool:
     return False
 
 def parse_time(time_str: str) -> timedelta | None:
-    """Парсит строки типа 10m, 2h, 1d в timedelta"""
     if not time_str:
         return None
     match = re.match(r"^(\d+)([smhd])$", time_str.lower())
@@ -87,22 +74,20 @@ def parse_time(time_str: str) -> timedelta | None:
     return None
 
 async def extract_target_user(message: types.Message, command: CommandObject):
-    """Вспомогательная функция для получения user_id из ответа на сообщение или аргументов"""
     if message.reply_to_message:
         return message.reply_to_message.from_user.id, message.reply_to_message.from_user.first_name
     
-    if command.args:
+    if command and command.args:
         args = command.args.split()
         target = args[0]
         if target.isdigit():
             return int(target), f"ID {target}"
         elif target.startswith("@"):
-            # Для получения ID по юзернейму нужен поиск в чате или передача объектом
             await message.reply("⚠️ Если пользователю не отвечают на сообщение, укажите его цифровой Telegram ID!")
             return None, None
     return None, None
 
-# ----------------- 1. УПРАВЛЕНИЕ ВАЙТЛИСТОМ АДМИНОВ -----------------
+# ----------------- 1. ВАЙТЛИСТ АДМИНОВ -----------------
 
 @dp.message(Command("botadmin"))
 async def add_bot_admin(message: types.Message, command: CommandObject):
@@ -234,6 +219,38 @@ async def list_filters(message: types.Message):
 
 # ----------------- 3. ПРИВЕТСТВИЯ (WELCOME) -----------------
 
+async def send_welcome_msg(chat_id: int, user_name: str, target_message: types.Message = None):
+    welcome_data = STORAGE["welcomes"].get(chat_id)
+    if not welcome_data:
+        return False
+
+    content_type = welcome_data["type"]
+
+    if content_type == "text":
+        text = welcome_data["text"].format(name=user_name, first_name=user_name) if welcome_data.get("text") else f"Привет, {user_name}!"
+        if target_message:
+            await target_message.reply(text)
+        else:
+            await bot.send_message(chat_id, text)
+    elif content_type == "animation":
+        caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
+        if target_message:
+            await target_message.reply_animation(animation=welcome_data["file_id"], caption=caption)
+        else:
+            await bot.send_animation(chat_id, animation=welcome_data["file_id"], caption=caption)
+    elif content_type == "photo":
+        caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
+        if target_message:
+            await target_message.reply_photo(photo=welcome_data["file_id"], caption=caption)
+        else:
+            await bot.send_photo(chat_id, photo=welcome_data["file_id"], caption=caption)
+    elif content_type == "sticker":
+        if target_message:
+            await target_message.reply_sticker(sticker=welcome_data["file_id"])
+        else:
+            await bot.send_sticker(chat_id, sticker=welcome_data["file_id"])
+    return True
+
 @dp.message(Command("setwelcome"))
 async def set_welcome(message: types.Message):
     if not await is_bot_admin(message):
@@ -262,6 +279,16 @@ async def set_welcome(message: types.Message):
     save_data()
     await message.reply("✅ Приветствие для новых участников успешно установлено!", parse_mode="Markdown")
 
+@dp.message(Command("welcome"))
+async def show_welcome(message: types.Message):
+    chat_id = message.chat.id
+    if chat_id not in STORAGE["welcomes"]:
+        await message.reply("ℹ️ В этом чате еще не установлено приветствие.\nНастроить можно командой `/setwelcome` (в ответ на сообщение).", parse_mode="Markdown")
+        return
+
+    await message.reply("👋 **Текущее приветствие для этого чата:**", parse_mode="Markdown")
+    await send_welcome_msg(chat_id, message.from_user.first_name, target_message=message)
+
 @dp.message(Command("clearwelcome"))
 async def clear_welcome(message: types.Message):
     if not await is_bot_admin(message):
@@ -279,25 +306,10 @@ async def clear_welcome(message: types.Message):
 @dp.message(F.new_chat_members)
 async def greet_new_members(message: types.Message):
     chat_id = message.chat.id
-    welcome_data = STORAGE["welcomes"].get(chat_id)
-    if not welcome_data:
-        return
-
     for member in message.new_chat_members:
-        name = member.first_name
-        content_type = welcome_data["type"]
-
-        if content_type == "text":
-            text = welcome_data["text"].format(name=name, first_name=name) if welcome_data.get("text") else f"Привет, {name}!"
-            await message.reply(text)
-        elif content_type == "animation":
-            caption = welcome_data.get("caption", "").format(name=name, first_name=name) if welcome_data.get("caption") else None
-            await message.reply_animation(animation=welcome_data["file_id"], caption=caption)
-        elif content_type == "photo":
-            caption = welcome_data.get("caption", "").format(name=name, first_name=name) if welcome_data.get("caption") else None
-            await message.reply_photo(photo=welcome_data["file_id"], caption=caption)
-        elif content_type == "sticker":
-            await message.reply_sticker(sticker=welcome_data["file_id"])
+        if member.is_bot:
+            continue
+        await send_welcome_msg(chat_id, member.first_name, target_message=message)
 
 # ----------------- 4. МОДЕРАЦИЯ (БАНЫ, МУТЫ, ВАРНЫ) -----------------
 
@@ -312,7 +324,8 @@ async def ban_user(message: types.Message, command: CommandObject):
         await message.reply("⚠️ Ответьте на сообщение нарушителя или укажите его ID!\nПример: `/ban 123456789 Спам`", parse_mode="Markdown")
         return
 
-    reason = " ".join(command.args.split()[1:]) if command.args and len(command.args.split()) > 1 else "Причина не указана"
+    args_list = command.args.split() if command.args else []
+    reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
 
     try:
         await bot.ban_chat_member(message.chat.id, target_id)
@@ -323,7 +336,10 @@ async def ban_user(message: types.Message, command: CommandObject):
             STORAGE["bans"][chat_id].append(target_id)
             save_data()
 
-        await message.reply(f"🚫 Пользователь **{target_name}** забанен!\n💬 Причина: {reason}", parse_mode="Markdown")
+        msg_text = f"🚫 Пользователь **{target_name}** забанен!"
+        if reason:
+            msg_text += f"\n💬 Причина: {reason}"
+        await message.reply(msg_text, parse_mode="Markdown")
     except Exception as e:
         await message.reply(f"❌ Не удалось забанить пользователя: {e}")
 
@@ -360,7 +376,17 @@ async def mute_user(message: types.Message, command: CommandObject):
         await message.reply("⚠️ Ответьте на сообщение пользователя или укажите его ID!\nПримеры: `/mute 10m`, `/mute 2h`, `/mute 1d`", parse_mode="Markdown")
         return
 
-    time_arg = command.args.split()[1] if command.args and len(command.args.split()) > 1 else "1h"
+    args_list = command.args.split() if command.args else []
+    time_arg = "1h"
+    reason = None
+
+    if len(args_list) > 1:
+        if parse_time(args_list[1]):
+            time_arg = args_list[1]
+            reason = " ".join(args_list[2:]) if len(args_list) > 2 else None
+        else:
+            reason = " ".join(args_list[1:])
+
     duration = parse_time(time_arg) or timedelta(hours=1)
     until_date = datetime.now() + duration
 
@@ -371,7 +397,11 @@ async def mute_user(message: types.Message, command: CommandObject):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=until_date
         )
-        await message.reply(f"🔇 Пользователь **{target_name}** переведен в режим чтения на {time_arg}!", parse_mode="Markdown")
+
+        msg_text = f"🔇 Пользователь **{target_name}** переведен в режим чтения на {time_arg}!"
+        if reason:
+            msg_text += f"\n💬 Причина: {reason}"
+        await message.reply(msg_text, parse_mode="Markdown")
     except Exception as e:
         await message.reply(f"❌ Не удалось замутить пользователя: {e}")
 
@@ -412,6 +442,9 @@ async def warn_user(message: types.Message, command: CommandObject):
         await message.reply("⚠️ Ответьте на сообщение нарушителя для выдачи варна!", parse_mode="Markdown")
         return
 
+    args_list = command.args.split() if command.args else []
+    reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+
     chat_id = message.chat.id
     if chat_id not in STORAGE["warns"]:
         STORAGE["warns"][chat_id] = {}
@@ -421,7 +454,6 @@ async def warn_user(message: types.Message, command: CommandObject):
     save_data()
 
     if current_warns >= 3:
-        # Автоматический мут при достижении 3 варнов
         STORAGE["warns"][chat_id][target_id] = 0
         save_data()
         try:
@@ -432,11 +464,41 @@ async def warn_user(message: types.Message, command: CommandObject):
                 permissions=ChatPermissions(can_send_messages=False),
                 until_date=until_date
             )
-            await message.reply(f"⚠️ Пользователь **{target_name}** получил 3/3 предупреждений и замучен на 24 часа!", parse_mode="Markdown")
+            msg_text = f"⚠️ Пользователь **{target_name}** получил 3/3 предупреждений и замучен на 24 часа!"
+            if reason:
+                msg_text += f"\n💬 Причина: {reason}"
+            await message.reply(msg_text, parse_mode="Markdown")
         except Exception as e:
             await message.reply(f"⚠️ 3/3 варнов достигнуто, но не удалось замутить: {e}")
     else:
-        await message.reply(f"⚠️ Пользователю **{target_name}** выдан варн! ({current_warns}/3)", parse_mode="Markdown")
+        msg_text = f"⚠️ Пользователю **{target_name}** выдан варн! ({current_warns}/3)"
+        if reason:
+            msg_text += f"\n💬 Причина: {reason}"
+        await message.reply(msg_text, parse_mode="Markdown")
+
+@dp.message(Command("warns"))
+async def check_warns(message: types.Message, command: CommandObject):
+    chat_id = message.chat.id
+
+    # Проверяем, есть ли цель в аргументах или в реплае
+    target_id, target_name = await extract_target_user(message, command)
+
+    if target_id and target_id != message.from_user.id:
+        # Просмотр чужих варнов доступен только админам бота
+        if not await is_bot_admin(message):
+            await message.reply("❌ Вы можете просматривать только свои варны!")
+            return
+    else:
+        # Если цель не указана — проверяем варны вызвавшего пользователя
+        target_id = message.from_user.id
+        target_name = message.from_user.first_name
+
+    warns_count = STORAGE["warns"].get(chat_id, {}).get(target_id, 0)
+    
+    if target_id == message.from_user.id:
+        await message.reply(f"📊 У вас **{warns_count}/3** предупреждений в этом чате.", parse_mode="Markdown")
+    else:
+        await message.reply(f"📊 У пользователя **{target_name}** количество предупреждений: **{warns_count}/3**.", parse_mode="Markdown")
 
 @dp.message(Command("resetwarns"))
 async def reset_warns(message: types.Message, command: CommandObject):
@@ -456,7 +518,7 @@ async def reset_warns(message: types.Message, command: CommandObject):
 
     await message.reply(f"✅ Предупреждения пользователя **{target_name}** сброшены!", parse_mode="Markdown")
 
-# ----------------- 5. ПРОВЕРКА ВХОДЯЩИХ СООБЩЕНИЙ (ФИЛЬТРЫ) -----------------
+# ----------------- 5. ФИЛЬТРЫ ВХОДЯЩИХ СООБЩЕНИЙ -----------------
 
 @dp.message(F.text)
 async def check_filters(message: types.Message):
