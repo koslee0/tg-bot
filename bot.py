@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
 
@@ -8,11 +9,33 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Словарь для хранения фильтров по чатам:
-# { chat_id: { "слово": {"type": "...", "file_id": "...", "text": "..."} } }
-CHAT_FILTERS = {}
+# Имя файла для сохранения фильтров
+DB_FILE = "filters.json"
 
-# Функция для проверки, является ли пользователь администратором
+# Загрузка фильтров из файла при запуске бота
+def load_filters():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # JSON сохраняет ключи словарей как строки, приводим chat_id обратно к int
+                return {int(chat_id): filters for chat_id, filters in data.items()}
+        except Exception as e:
+            print(f"Ошибка при загрузке фильтров: {e}")
+    return {}
+
+# Сохранение фильтров в файл
+def save_filters():
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(CHAT_FILTERS, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Ошибка при сохранении фильтров: {e}")
+
+# Словарь фильтров по чатам (загружается из файла при старте)
+CHAT_FILTERS = load_filters()
+
+# Функция для проверки прав администратора
 async def is_admin(message: types.Message) -> bool:
     if message.chat.type == "private":
         return True
@@ -21,7 +44,7 @@ async def is_admin(message: types.Message) -> bool:
     return member.status in ["creator"]
 
 
-# 1. Создание фильтра (для конкретного чата)
+# 1. Создание фильтра (только для админов)
 @dp.message(Command("filter"))
 async def add_filter(message: types.Message, command: CommandObject):
     if not await is_admin(message):
@@ -29,7 +52,7 @@ async def add_filter(message: types.Message, command: CommandObject):
         return
 
     if not message.reply_to_message:
-        await message.reply("⚠️ Ответьте этой командой на сообщение/гифку/стикер/картинку, которую хотите привязать!")
+        await message.reply("⚠️ Ответьте этой командой на сообщение которое хотите привязать!")
         return
 
     if not command.args:
@@ -40,7 +63,6 @@ async def add_filter(message: types.Message, command: CommandObject):
     trigger_word = command.args.strip().lower()
     reply = message.reply_to_message
 
-    # Если для этого чата еще нет словаря, создаем его
     if chat_id not in CHAT_FILTERS:
         CHAT_FILTERS[chat_id] = {}
 
@@ -61,10 +83,13 @@ async def add_filter(message: types.Message, command: CommandObject):
         await message.reply("❌ Этот тип сообщений пока не поддерживается.")
         return
 
-    await message.reply(f"✅ Фильтр на слово **'{trigger_word}'** успешно сохранен для этого чата!", parse_mode="Markdown")
+    # Сохраняем в файл на диске
+    save_filters()
+
+    await message.reply(f"✅ Фильтр на слово **'{trigger_word}'** успешно сохранен!", parse_mode="Markdown")
 
 
-# 2. Удаление фильтра (в текущем чате)
+# 2. Удаление фильтра (только для админов)
 @dp.message(Command("stop"))
 async def remove_filter(message: types.Message, command: CommandObject):
     if not await is_admin(message):
@@ -80,12 +105,19 @@ async def remove_filter(message: types.Message, command: CommandObject):
 
     if chat_id in CHAT_FILTERS and trigger_word in CHAT_FILTERS[chat_id]:
         del CHAT_FILTERS[chat_id][trigger_word]
-        await message.reply(f"🗑️ Фильтр **'{trigger_word}'** удален из этого чата!", parse_mode="Markdown")
+        
+        if not CHAT_FILTERS[chat_id]:
+            del CHAT_FILTERS[chat_id]
+
+        # Обновляем файл на диске
+        save_filters()
+
+        await message.reply(f"🗑️ Фильтр **'{trigger_word}'** удален!", parse_mode="Markdown")
     else:
         await message.reply(f"❓ Фильтр **'{trigger_word}'** не найден в этом чате.")
 
 
-# 3. Список всех фильтров текущего чата
+# 3. Список всех фильтров текущего чата (доступен всем)
 @dp.message(Command("filters"))
 async def list_filters(message: types.Message):
     chat_id = message.chat.id
@@ -98,12 +130,11 @@ async def list_filters(message: types.Message):
     await message.reply(f"📜 **Активные фильтры этого чата:**\n{words}", parse_mode="Markdown")
 
 
-# 4. Проверка входящих сообщений (ищет фильтры строго для текущего чата)
+# 4. Проверка входящих сообщений (точное совпадение по словам)
 @dp.message(F.text)
 async def check_filters(message: types.Message):
     chat_id = message.chat.id
     
-    # Если для этого чата нет фильтров, пропускаем
     if chat_id not in CHAT_FILTERS or not CHAT_FILTERS[chat_id]:
         return
 
@@ -136,8 +167,9 @@ async def check_filters(message: types.Message):
 
 
 async def main():
-    print("Бот-модератор запущен с раздельными чат-фильтрами!")
+    print("Бот-модератор запущен и готов к работе!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+```[cite: 1]
