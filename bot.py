@@ -35,7 +35,6 @@ def load_data():
 
 def save_data():
     try:
-        # Автоматическая очистка мусора перед сохранением (удаляем пустые словари/списки)
         clean_storage = {
             "filters": {cid: f for cid, f in STORAGE["filters"].items() if f},
             "bot_admins": {cid: a for cid, a in STORAGE["bot_admins"].items() if a},
@@ -417,7 +416,6 @@ async def unban_user(message: types.Message, command: CommandObject):
     try:
         await bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
         chat_id = message.chat.id
-        # УДАЛЯЕМ ИЗ СПИСКА БАНОВ ПРИ РАЗБАНЕ, ЧТОБЫ НЕ ЗАСОРЯТЬ ХРАНИЛИЩЕ
         if chat_id in STORAGE["bans"] and target_id in STORAGE["bans"][chat_id]:
             STORAGE["bans"][chat_id].remove(target_id)
             if not STORAGE["bans"][chat_id]:
@@ -666,7 +664,7 @@ async def check_filters(message: types.Message):
             break
 
 async def main():
-    print("Бот-модератор запущен с очисткой хранилища!")
+    print("Бот-модератор успешно запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
