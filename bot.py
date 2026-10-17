@@ -9,8 +9,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Имя файла для сохранения фильтров
-DB_FILE = "filters.json"
+# Путь к защищенной папке Volume на Railway
+DATA_DIR = "/app/data"
+# Если папки еще нет (например, при локальном запуске), создаем её
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Имя файла для сохранения фильтров внутри Volume
+DB_FILE = os.path.join(DATA_DIR, "filters.json")
 
 # Загрузка фильтров из файла при запуске бота
 def load_filters():
@@ -18,13 +23,12 @@ def load_filters():
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # JSON сохраняет ключи словарей как строки, приводим chat_id обратно к int
                 return {int(chat_id): filters for chat_id, filters in data.items()}
         except Exception as e:
             print(f"Ошибка при загрузке фильтров: {e}")
     return {}
 
-# Сохранение фильтров в файл
+# Сохранение фильтров в файл Volume
 def save_filters():
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
@@ -32,7 +36,7 @@ def save_filters():
     except Exception as e:
         print(f"Ошибка при сохранении фильтров: {e}")
 
-# Словарь фильтров по чатам (загружается из файла при старте)
+# Словарь фильтров по чатам (загружается из постоянного хранилища)
 CHAT_FILTERS = load_filters()
 
 # Функция для проверки прав администратора
@@ -66,7 +70,6 @@ async def add_filter(message: types.Message, command: CommandObject):
     if chat_id not in CHAT_FILTERS:
         CHAT_FILTERS[chat_id] = {}
 
-    # Сохраняем контент в словарь конкретного чата
     if reply.animation:
         CHAT_FILTERS[chat_id][trigger_word] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.caption}
     elif reply.sticker:
@@ -83,10 +86,10 @@ async def add_filter(message: types.Message, command: CommandObject):
         await message.reply("❌ Этот тип сообщений пока не поддерживается.")
         return
 
-    # Сохраняем в файл на диске
+    # Записываем фильтры в Volume
     save_filters()
 
-    await message.reply(f"✅ Фильтр на слово **'{trigger_word}'** успешно сохранен!", parse_mode="Markdown")
+    await message.reply(f"✅ Фильтр на слово **'{trigger_word}'** сохранен в постоянную память!", parse_mode="Markdown")
 
 
 # 2. Удаление фильтра (только для админов)
@@ -109,7 +112,6 @@ async def remove_filter(message: types.Message, command: CommandObject):
         if not CHAT_FILTERS[chat_id]:
             del CHAT_FILTERS[chat_id]
 
-        # Обновляем файл на диске
         save_filters()
 
         await message.reply(f"🗑️ Фильтр **'{trigger_word}'** удален!", parse_mode="Markdown")
@@ -117,7 +119,7 @@ async def remove_filter(message: types.Message, command: CommandObject):
         await message.reply(f"❓ Фильтр **'{trigger_word}'** не найден в этом чате.")
 
 
-# 3. Список всех фильтров текущего чата (доступен всем)
+# 3. Список фильтров (для всех)
 @dp.message(Command("filters"))
 async def list_filters(message: types.Message):
     chat_id = message.chat.id
@@ -130,7 +132,7 @@ async def list_filters(message: types.Message):
     await message.reply(f"📜 **Активные фильтры этого чата:**\n{words}", parse_mode="Markdown")
 
 
-# 4. Проверка входящих сообщений (точное совпадение по словам)
+# 4. Проверка входящих сообщений
 @dp.message(F.text)
 async def check_filters(message: types.Message):
     chat_id = message.chat.id
@@ -167,9 +169,8 @@ async def check_filters(message: types.Message):
 
 
 async def main():
-    print("Бот-модератор запущен и готов к работе!")
+    print("Бот-модератор запущен с привязанным Volume!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-```[cite: 1]
