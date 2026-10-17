@@ -26,8 +26,8 @@ def load_data():
                     "filters": {int(cid): f for cid, f in data.get("filters", {}).items()},
                     "bot_admins": {int(cid): a for cid, a in data.get("bot_admins", {}).items()},
                     "welcomes": {int(cid): w for cid, w in data.get("welcomes", {}).items()},
-                    "warns": {int(cid): {int(uid): cnt for uid, cnt in u_warns.items()} for cid, u_warns in data.get("warns", {}).items()},
-                    "bans": {int(cid): b for cid, b in data.get("bans", {}).items()}
+                    "warns": {int(cid): {int(uid): cnt for uid, cnt in u_warns.items() if cnt > 0} for cid, u_warns in data.get("warns", {}).items()},
+                    "bans": {int(cid): list(set(b)) for cid, b in data.get("bans", {}).items() if b}
                 }
         except Exception as e:
             print(f"Ошибка при загрузке базы данных: {e}")
@@ -35,14 +35,21 @@ def load_data():
 
 def save_data():
     try:
+        # Автоматическая очистка мусора перед сохранением (удаляем пустые словари/списки)
+        clean_storage = {
+            "filters": {cid: f for cid, f in STORAGE["filters"].items() if f},
+            "bot_admins": {cid: a for cid, a in STORAGE["bot_admins"].items() if a},
+            "welcomes": {cid: w for cid, w in STORAGE["welcomes"].items() if w},
+            "warns": {cid: {uid: cnt for uid, cnt in u_warns.items() if cnt > 0} for cid, u_warns in STORAGE["warns"].items() if u_warns},
+            "bans": {cid: list(set(b)) for cid, b in STORAGE["bans"].items() if b}
+        }
         with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(STORAGE, f, ensure_ascii=False, indent=4)
+            json.dump(clean_storage, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print(f"Ошибка при сохранении базы данных: {e}")
 
 STORAGE = load_data()
 
-# Стандартные полные права участника чата без ограничений
 FULL_PERMISSIONS = ChatPermissions(
     can_send_messages=True,
     can_send_media_messages=True,
@@ -54,7 +61,6 @@ FULL_PERMISSIONS = ChatPermissions(
     can_pin_messages=True
 )
 
-# ----------------- ПРОВЕРКА ПРАВ -----------------
 async def is_bot_admin(message: types.Message) -> bool:
     if message.chat.type == "private":
         return True
@@ -411,8 +417,11 @@ async def unban_user(message: types.Message, command: CommandObject):
     try:
         await bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
         chat_id = message.chat.id
+        # УДАЛЯЕМ ИЗ СПИСКА БАНОВ ПРИ РАЗБАНЕ, ЧТОБЫ НЕ ЗАСОРЯТЬ ХРАНИЛИЩЕ
         if chat_id in STORAGE["bans"] and target_id in STORAGE["bans"][chat_id]:
             STORAGE["bans"][chat_id].remove(target_id)
+            if not STORAGE["bans"][chat_id]:
+                del STORAGE["bans"][chat_id]
             save_data()
 
         await message.reply(f"✅ Пользователь **{target_name}** разбанен!", parse_mode="Markdown")
@@ -431,8 +440,6 @@ async def mute_user(message: types.Message, command: CommandObject):
         return
 
     args_list = command.args.split() if command.args else []
-    
-    # Определяем время и причину с учетом того, был ли использован reply или аргумент с ID
     time_arg = "1h"
     reason = None
 
@@ -553,10 +560,14 @@ async def unwarn_user(message: types.Message, command: CommandObject):
 
     if current_warns > 0:
         new_warns = current_warns - 1
-        STORAGE["warns"][chat_id][target_id] = new_warns
+        if new_warns == 0:
+            del STORAGE["warns"][chat_id][target_id]
+            if not STORAGE["warns"][chat_id]:
+                del STORAGE["warns"][chat_id]
+        else:
+            STORAGE["warns"][chat_id][target_id] = new_warns
         save_data()
         
-        # Если варны полностью снялись или уменьшились, возвращаем стандартные разрешения
         try:
             await bot.restrict_chat_member(
                 chat_id=chat_id,
@@ -603,7 +614,9 @@ async def reset_warns(message: types.Message, command: CommandObject):
 
     chat_id = message.chat.id
     if chat_id in STORAGE["warns"] and target_id in STORAGE["warns"][chat_id]:
-        STORAGE["warns"][chat_id][target_id] = 0
+        del STORAGE["warns"][chat_id][target_id]
+        if not STORAGE["warns"][chat_id]:
+            del STORAGE["warns"][chat_id]
         save_data()
 
     try:
@@ -649,11 +662,11 @@ async def check_filters(message: types.Message):
             elif content_type == "video":
                 await message.reply_video(video=content["file_id"], caption=content.get("caption"))
             elif content_type == "voice":
-                await message.reply_voice(voice=content["file_id"])
+                await message.reply_voice(video=content["file_id"])
             break
 
 async def main():
-    print("Бот-модератор запущен!")
+    print("Бот-модератор запущен с очисткой хранилища!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
