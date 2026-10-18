@@ -512,7 +512,7 @@ async def warn_user(message: types.Message, command: CommandObject):
         return
 
     admin_name = message.from_user.first_name
-    time_arg, reason = parse_time_and_reason(message, command, default_time="1d")
+    _, reason = parse_time_and_reason(message, command)
 
     chat_id = message.chat.id
     if chat_id not in STORAGE["warns"]:
@@ -522,12 +522,39 @@ async def warn_user(message: types.Message, command: CommandObject):
     STORAGE["warns"][chat_id][target_id] = current_warns
     save_data()
 
-    if current_warns >= 3:
+    # Показываем накопленный прогресс варнов до мута (макс 3) и до бана (макс 5)
+    progress_mute = min(current_warns, 3)
+    progress_ban = min(current_warns, 5)
+
+    # 5 варнов — бан навсегда
+    if current_warns >= 5:
         STORAGE["warns"][chat_id][target_id] = 0
         save_data()
         try:
-            duration = parse_time(time_arg) or timedelta(days=1)
-            until_date = datetime.now() + duration
+            await bot.ban_chat_member(chat_id, target_id)
+            if chat_id not in STORAGE["bans"]:
+                STORAGE["bans"][chat_id] = []
+            if target_id not in STORAGE["bans"][chat_id]:
+                STORAGE["bans"][chat_id].append(target_id)
+                save_data()
+
+            msg_text = (
+                f"Пользователь **{target_name}** получил **5/5** предупреждений и забанен навсегда!\n"
+                f"**Администратор:** {admin_name}\n"
+                f"варнов до мута: 3/3\n"
+                f"варнов до бана: 5/5"
+            )
+            if reason:
+                msg_text += f"\n**Причина:** {reason}"
+
+            await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
+        except Exception as e:
+            await bot.send_message(message.chat.id, f"5 варнов достигнуто, но не удалось забанить: {e}")
+
+    # 3 варна — мут на 1 день
+    elif current_warns == 3:
+        try:
+            until_date = datetime.now() + timedelta(days=1)
             await bot.restrict_chat_member(
                 chat_id=chat_id,
                 user_id=target_id,
@@ -535,19 +562,23 @@ async def warn_user(message: types.Message, command: CommandObject):
                 until_date=until_date
             )
             msg_text = (
-                f"Пользователь **{target_name}** получил **3/3** предупреждений и замучен на **{time_arg}**!\n"
-                f"**Администратор:** {admin_name}"
+                f"Пользователь **{target_name}** получил **3/5** предупреждений и замучен на **1д**!\n"
+                f"**Администратор:** {admin_name}\n"
+                f"варнов до мута: 3/3\n"
+                f"варнов до бана: 3/5"
             )
             if reason:
                 msg_text += f"\n**Причина:** {reason}"
 
             await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
         except Exception as e:
-            await bot.send_message(message.chat.id, f"Не удалось замутить пользователя после 3 варнов: {e}")
+            await bot.send_message(message.chat.id, f"3 варна достигнуто, но не удалось замутить: {e}")
     else:
         msg_text = (
-            f"Пользователю **{target_name}** выдано предупреждение (**{current_warns}/3**).\n"
-            f"**Администратор:** {admin_name}"
+            f"Пользователю **{target_name}** выдано предупреждение.\n"
+            f"**Администратор:** {admin_name}\n"
+            f"варнов до мута: {progress_mute}/3\n"
+            f"варнов до бана: {progress_ban}/5"
         )
         if reason:
             msg_text += f"\n**Причина:** {reason}"
@@ -577,9 +608,14 @@ async def unwarn_user(message: types.Message, command: CommandObject):
             STORAGE["warns"][chat_id][target_id] = new_warns
         save_data()
 
+        progress_mute = min(new_warns, 3)
+        progress_ban = min(new_warns, 5)
+
         msg_text = (
-            f"С пользователя **{target_name}** снято предупреждение. Текущий счёт: **{new_warns}/3**.\n"
-            f"**Администратор:** {admin_name}"
+            f"С пользователя **{target_name}** снято предупреждение.\n"
+            f"**Администратор:** {admin_name}\n"
+            f"варнов до мута: {progress_mute}/3\n"
+            f"варнов до бана: {progress_ban}/5"
         )
         await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     else:
@@ -598,7 +634,15 @@ async def check_warns(message: types.Message, command: CommandObject):
         target_name = message.from_user.first_name
 
     warns_count = STORAGE["warns"].get(chat_id, {}).get(target_id, 0)
-    await bot.send_message(chat_id, f"Количество предупреждений у пользователя **{target_name}**: **{warns_count}/3**.", parse_mode="Markdown")
+    progress_mute = min(warns_count, 3)
+    progress_ban = min(warns_count, 5)
+
+    msg_text = (
+        f"Количество предупреждений у пользователя **{target_name}**:\n"
+        f"варнов до мута: {progress_mute}/3\n"
+        f"варнов до бана: {progress_ban}/5"
+    )
+    await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
 
 @dp.message(Command("resetwarns"))
 async def reset_warns(message: types.Message, command: CommandObject):
