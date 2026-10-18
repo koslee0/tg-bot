@@ -512,7 +512,10 @@ async def warn_user(message: types.Message, command: CommandObject):
         return
 
     admin_name = message.from_user.first_name
-    _, reason = parse_time_and_reason(message, command)
+    # По умолчанию варн дается на 1 неделю (7d), если пользователь не указал иное
+    time_arg, reason = parse_time_and_reason(message, command, default_time="7d")
+    
+    duration = parse_time(time_arg) or timedelta(days=7)
 
     chat_id = message.chat.id
     if chat_id not in STORAGE["warns"]:
@@ -522,7 +525,6 @@ async def warn_user(message: types.Message, command: CommandObject):
     STORAGE["warns"][chat_id][target_id] = current_warns
     save_data()
 
-    # Показываем накопленный прогресс варнов до мута (макс 3) и до бана (макс 5)
     progress_mute = min(current_warns, 3)
     progress_ban = min(current_warns, 5)
 
@@ -578,7 +580,8 @@ async def warn_user(message: types.Message, command: CommandObject):
             f"Пользователю **{target_name}** выдано предупреждение.\n"
             f"**Администратор:** {admin_name}\n"
             f"варнов до мута: {progress_mute}/3\n"
-            f"варнов до бана: {progress_ban}/5"
+            f"варнов до бана: {progress_ban}/5\n"
+            f"Срок действия: {time_arg}"
         )
         if reason:
             msg_text += f"\n**Причина:** {reason}"
