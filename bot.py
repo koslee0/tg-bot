@@ -103,6 +103,32 @@ async def extract_target_user(message: types.Message, command: CommandObject):
             return int(target), f"ID {target}"
     return None, None
 
+def parse_time_and_reason(message: types.Message, command: CommandObject, default_time: str = None):
+    args_list = command.args.split() if command and command.args else []
+    time_arg = default_time
+    reason = None
+
+    if message.reply_to_message:
+        if len(args_list) >= 1:
+            parsed = parse_time(args_list[0])
+            if parsed:
+                time_arg = args_list[0]
+                reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
+            else:
+                reason = " ".join(args_list)
+    else:
+        if len(args_list) >= 2:
+            parsed = parse_time(args_list[1])
+            if parsed:
+                time_arg = args_list[1]
+                reason = " ".join(args_list[2:]) if len(args_list) > 2 else None
+            else:
+                reason = " ".join(args_list[1:])
+        elif len(args_list) == 1:
+            reason = None
+
+    return time_arg, reason
+
 # ----------------- 1. ВАЙТЛИСТ АДМИНОВ -----------------
 
 @dp.message(Command("botadmin"))
@@ -238,14 +264,13 @@ async def list_filters(message: types.Message):
         await message.reply("В этом чате пока нет активных фильтров.")
         return
 
-    # Сортировка по длине слова (сначала длинные, ниже короткие) + стиль Розы[cite: 3]
     sorted_words = sorted(filters.keys(), key=lambda w: (-len(w), w))
     lines = ["Список фильтров в чате:", *[f"- {w}" for w in sorted_words]]
     await message.reply("\n".join(lines))
 
 # ----------------- 3. ПРИВЕТСТВИЯ (WELCOME) -----------------
 
-async def send_welcome_msg(chat_id: int, user_name: str, target_message: types.Message = None):
+async def send_welcome_msg(chat_id: int, user_name: str):
     welcome_data = STORAGE["welcomes"].get(chat_id)
     if not welcome_data:
         return False
@@ -255,27 +280,15 @@ async def send_welcome_msg(chat_id: int, user_name: str, target_message: types.M
     try:
         if content_type == "text":
             text = welcome_data["text"].format(name=user_name, first_name=user_name) if welcome_data.get("text") else f"Привет, {user_name}!"
-            if target_message:
-                await target_message.reply(text)
-            else:
-                await bot.send_message(chat_id, text)
+            await bot.send_message(chat_id, text)
         elif content_type == "animation":
             caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
-            if target_message:
-                await target_message.reply_animation(animation=welcome_data["file_id"], caption=caption)
-            else:
-                await bot.send_animation(chat_id, animation=welcome_data["file_id"], caption=caption)
+            await bot.send_animation(chat_id, animation=welcome_data["file_id"], caption=caption)
         elif content_type == "photo":
             caption = welcome_data.get("caption", "").format(name=user_name, first_name=user_name) if welcome_data.get("caption") else None
-            if target_message:
-                await target_message.reply_photo(photo=welcome_data["file_id"], caption=caption)
-            else:
-                await bot.send_photo(chat_id, photo=welcome_data["file_id"], caption=caption)
+            await bot.send_photo(chat_id, photo=welcome_data["file_id"], caption=caption)
         elif content_type == "sticker":
-            if target_message:
-                await target_message.reply_sticker(sticker=welcome_data["file_id"])
-            else:
-                await bot.send_sticker(chat_id, sticker=welcome_data["file_id"])
+            await bot.send_sticker(chat_id, sticker=welcome_data["file_id"])
     except Exception as e:
         print(f"Ошибка при отправке приветствия: {e}")
     return True
@@ -316,7 +329,7 @@ async def show_welcome(message: types.Message):
         return
 
     await message.reply("👋 **Текущее приветствие для этого чата:**", parse_mode="Markdown")
-    await send_welcome_msg(chat_id, message.from_user.first_name, target_message=message)
+    await send_welcome_msg(chat_id, message.from_user.first_name)
 
 @dp.message(Command("clearwelcome"))
 async def clear_welcome(message: types.Message):
@@ -332,14 +345,7 @@ async def clear_welcome(message: types.Message):
     else:
         await message.reply("❓ В этом чате не было установлено приветствие.")
 
-@dp.message(F.new_chat_members)
-async def greet_new_members_message(message: types.Message):
-    chat_id = message.chat.id
-    for member in message.new_chat_members:
-        if member.is_bot:
-            continue
-        await send_welcome_msg(chat_id, member.first_name, target_message=message)
-
+# Единственный и стабильный вариант приветствия[cite: 4]
 @dp.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
 async def greet_new_members_event(event: ChatMemberUpdated):
     user = event.new_chat_member.user
@@ -352,19 +358,23 @@ async def greet_new_members_event(event: ChatMemberUpdated):
 @dp.message(Command("ban"))
 async def ban_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав модератора!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение нарушителя или укажите его ID!\nПример: `/ban 123456789 Спам`", parse_mode="Markdown")
         return
 
-    args_list = command.args.split() if command.args else []
-    reason = " ".join(args_list[1:]) if len(args_list) > 1 and not message.reply_to_message else " ".join(args_list) if len(args_list) > 0 and message.reply_to_message else None
+    admin_name = message.from_user.first_name
+    time_arg, reason = parse_time_and_reason(message, command)
 
     try:
-        await bot.ban_chat_member(message.chat.id, target_id)
+        until_date = None
+        if time_arg:
+            duration = parse_time(time_arg)
+            if duration:
+                until_date = datetime.now() + duration
+
+        await bot.ban_chat_member(message.chat.id, target_id, until_date=until_date)
         chat_id = message.chat.id
         if chat_id not in STORAGE["bans"]:
             STORAGE["bans"][chat_id] = []
@@ -372,48 +382,55 @@ async def ban_user(message: types.Message, command: CommandObject):
             STORAGE["bans"][chat_id].append(target_id)
             save_data()
 
-        msg_text = f"🚫 Пользователь **{target_name}** забанен!"
+        time_text = f" на {time_arg}" if time_arg else " навсегда"
+        msg_text = (
+            f"🚫 Пользователь **{target_name}** забанен{time_text}!\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
         if reason:
             msg_text += f"\n💬 Причина: {reason}"
-        await message.reply(msg_text, parse_mode="Markdown")
+
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     except Exception as e:
-        await message.reply(f"❌ Не удалось забанить пользователя: {e}")
+        await bot.send_message(message.chat.id, f"❌ Не удалось забанить пользователя: {e}")
 
 @dp.message(Command("kick"))
 async def kick_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав модератора!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение нарушителя или укажите его ID!\nПример: `/kick 123456789 Оффтоп`", parse_mode="Markdown")
         return
 
-    args_list = command.args.split() if command.args else []
-    reason = " ".join(args_list[1:]) if len(args_list) > 1 and not message.reply_to_message else " ".join(args_list) if len(args_list) > 0 and message.reply_to_message else None
+    admin_name = message.from_user.first_name
+    _, reason = parse_time_and_reason(message, command)
 
     try:
         await bot.ban_chat_member(message.chat.id, target_id)
         await bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
 
-        msg_text = f"👢 Пользователь **{target_name}** изгнан (кикнут) из чата!"
+        msg_text = (
+            f"👢 Пользователь **{target_name}** изгнан из чата!\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
         if reason:
             msg_text += f"\n💬 Причина: {reason}"
-        await message.reply(msg_text, parse_mode="Markdown")
+
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     except Exception as e:
-        await message.reply(f"❌ Не удалось кикнуть пользователя: {e}")
+        await bot.send_message(message.chat.id, f"❌ Не удалось кикнуть пользователя: {e}")
 
 @dp.message(Command("unban"))
 async def unban_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение или укажите ID забаненного пользователя!", parse_mode="Markdown")
         return
+
+    admin_name = message.from_user.first_name
 
     try:
         await bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
@@ -424,41 +441,25 @@ async def unban_user(message: types.Message, command: CommandObject):
                 del STORAGE["bans"][chat_id]
             save_data()
 
-        await message.reply(f"✅ Пользователь **{target_name}** разбанен!", parse_mode="Markdown")
+        msg_text = (
+            f"✅ Пользователь **{target_name}** разбанен!\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     except Exception as e:
-        await message.reply(f"❌ Ошибка при разбане: {e}")
+        await bot.send_message(message.chat.id, f"❌ Ошибка при разбане: {e}")
 
 @dp.message(Command("mute"))
 async def mute_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав модератора!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение пользователя или укажите его ID!\nПримеры: `/mute 10m`, `/mute 2h`, `/mute 1d`", parse_mode="Markdown")
         return
 
-    args_list = command.args.split() if command.args else []
-    time_arg = "1h"
-    reason = None
-
-    if message.reply_to_message:
-        if len(args_list) >= 1:
-            parsed = parse_time(args_list[0])
-            if parsed:
-                time_arg = args_list[0]
-                reason = " ".join(args_list[1:]) if len(args_list) > 1 else None
-            else:
-                reason = " ".join(args_list)
-    else:
-        if len(args_list) >= 2:
-            parsed = parse_time(args_list[1])
-            if parsed:
-                time_arg = args_list[1]
-                reason = " ".join(args_list[2:]) if len(args_list) > 2 else None
-            else:
-                reason = " ".join(args_list[1:])
+    admin_name = message.from_user.first_name
+    time_arg, reason = parse_time_and_reason(message, command, default_time="1h")
 
     duration = parse_time(time_arg) or timedelta(hours=1)
     until_date = datetime.now() + duration
@@ -471,23 +472,27 @@ async def mute_user(message: types.Message, command: CommandObject):
             until_date=until_date
         )
 
-        msg_text = f"🔇 Пользователь **{target_name}** переведен в режим чтения на {time_arg}!"
+        msg_text = (
+            f"🔇 Пользователь **{target_name}** замучен на {time_arg}!\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
         if reason:
             msg_text += f"\n💬 Причина: {reason}"
-        await message.reply(msg_text, parse_mode="Markdown")
+
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     except Exception as e:
-        await message.reply(f"❌ Не удалось замутить пользователя: {e}")
+        await bot.send_message(message.chat.id, f"❌ Не удалось замутить пользователя: {e}")
 
 @dp.message(Command("unmute"))
 async def unmute_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение замученного пользователя!", parse_mode="Markdown")
         return
+
+    admin_name = message.from_user.first_name
 
     try:
         await bot.restrict_chat_member(
@@ -495,23 +500,25 @@ async def unmute_user(message: types.Message, command: CommandObject):
             user_id=target_id,
             permissions=FULL_PERMISSIONS
         )
-        await message.reply(f"🔊 Пользователю **{target_name}** возвращен полный доступ к чату!", parse_mode="Markdown")
+        msg_text = (
+            f"🔊 С пользователя **{target_name}** сняты ограничения!\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     except Exception as e:
-        await message.reply(f"❌ Ошибка при снятии мута: {e}")
+        await bot.send_message(message.chat.id, f"❌ Ошибка при снятии мута: {e}")
 
 @dp.message(Command("warn"))
 async def warn_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение нарушителя для выдачи варна!", parse_mode="Markdown")
         return
 
-    args_list = command.args.split() if command.args else []
-    reason = " ".join(args_list[1:]) if len(args_list) > 1 and not message.reply_to_message else " ".join(args_list) if len(args_list) > 0 and message.reply_to_message else None
+    admin_name = message.from_user.first_name
+    time_arg, reason = parse_time_and_reason(message, command, default_time="1d")
 
     chat_id = message.chat.id
     if chat_id not in STORAGE["warns"]:
@@ -525,36 +532,44 @@ async def warn_user(message: types.Message, command: CommandObject):
         STORAGE["warns"][chat_id][target_id] = 0
         save_data()
         try:
-            until_date = datetime.now() + timedelta(days=1)
+            duration = parse_time(time_arg) or timedelta(days=1)
+            until_date = datetime.now() + duration
             await bot.restrict_chat_member(
                 chat_id=chat_id,
                 user_id=target_id,
                 permissions=ChatPermissions(can_send_messages=False),
                 until_date=until_date
             )
-            msg_text = f"⚠️ Пользователь **{target_name}** получил 3/3 предупреждений и замучен на 24 часа!"
+            msg_text = (
+                f"⚠️ Пользователь **{target_name}** получил 3/3 предупреждений и замучен на {time_arg}!\n"
+                f"👮 Администратор: **{admin_name}**"
+            )
             if reason:
                 msg_text += f"\n💬 Причина: {reason}"
-            await message.reply(msg_text, parse_mode="Markdown")
+
+            await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
         except Exception as e:
-            await message.reply(f"⚠️ 3/3 варнов достигнуто, но не удалось замутить: {e}")
+            await bot.send_message(message.chat.id, f"⚠️ 3/3 варнов достигнуто, но не удалось замутить: {e}")
     else:
-        msg_text = f"⚠️ Пользователю **{target_name}** выдан варн! ({current_warns}/3)"
+        msg_text = (
+            f"⚠️ Пользователю **{target_name}** выдан варн! ({current_warns}/3)\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
         if reason:
             msg_text += f"\n💬 Причина: {reason}"
-        await message.reply(msg_text, parse_mode="Markdown")
+
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
 
 @dp.message(Command("unwarn"))
 async def unwarn_user(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение пользователя или укажите его ID для снятия варна!", parse_mode="Markdown")
         return
 
+    admin_name = message.from_user.first_name
     chat_id = message.chat.id
     current_warns = STORAGE["warns"].get(chat_id, {}).get(target_id, 0)
 
@@ -567,19 +582,14 @@ async def unwarn_user(message: types.Message, command: CommandObject):
         else:
             STORAGE["warns"][chat_id][target_id] = new_warns
         save_data()
-        
-        try:
-            await bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=target_id,
-                permissions=FULL_PERMISSIONS
-            )
-        except Exception:
-            pass
 
-        await message.reply(f"✅ С пользователя **{target_name}** снято одно предупреждение! Текущий счет: **{new_warns}/3**.", parse_mode="Markdown")
+        msg_text = (
+            f"✅ С пользователя **{target_name}** снято предупреждение! (Текущий счет: {new_warns}/3)\n"
+            f"👮 Администратор: **{admin_name}**"
+        )
+        await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
     else:
-        await message.reply(f"ℹ️ У пользователя **{target_name}** нет активных предупреждений.", parse_mode="Markdown")
+        await bot.send_message(message.chat.id, f"ℹ️ У пользователя **{target_name}** нет активных предупреждений.", parse_mode="Markdown")
 
 @dp.message(Command("warns"))
 async def check_warns(message: types.Message, command: CommandObject):
@@ -588,30 +598,24 @@ async def check_warns(message: types.Message, command: CommandObject):
 
     if target_id and target_id != message.from_user.id:
         if not await is_bot_admin(message):
-            await message.reply("❌ Вы можете просматривать только свои варны!")
             return
     else:
         target_id = message.from_user.id
         target_name = message.from_user.first_name
 
     warns_count = STORAGE["warns"].get(chat_id, {}).get(target_id, 0)
-    
-    if target_id == message.from_user.id:
-        await message.reply(f"📊 У вас **{warns_count}/3** предупреждений в этом чате.", parse_mode="Markdown")
-    else:
-        await message.reply(f"📊 У пользователя **{target_name}** количество предупреждений: **{warns_count}/3**.", parse_mode="Markdown")
+    await bot.send_message(chat_id, f"📊 У пользователя **{target_name}** количество предупреждений: **{warns_count}/3**.", parse_mode="Markdown")
 
 @dp.message(Command("resetwarns"))
 async def reset_warns(message: types.Message, command: CommandObject):
     if not await is_bot_admin(message):
-        await message.reply("❌ У вас нет прав!")
         return
 
     target_id, target_name = await extract_target_user(message, command)
     if not target_id:
-        await message.reply("⚠️ Ответьте на сообщение пользователя!", parse_mode="Markdown")
         return
 
+    admin_name = message.from_user.first_name
     chat_id = message.chat.id
     if chat_id in STORAGE["warns"] and target_id in STORAGE["warns"][chat_id]:
         del STORAGE["warns"][chat_id][target_id]
@@ -619,16 +623,11 @@ async def reset_warns(message: types.Message, command: CommandObject):
             del STORAGE["warns"][chat_id]
         save_data()
 
-    try:
-        await bot.restrict_chat_member(
-            chat_id=chat_id,
-            user_id=target_id,
-            permissions=FULL_PERMISSIONS
-        )
-    except Exception:
-        pass
-
-    await message.reply(f"✅ Предупреждения пользователя **{target_name}** сброшены!", parse_mode="Markdown")
+    msg_text = (
+        f"✅ Предупреждения пользователя **{target_name}** сброшены!\n"
+        f"👮 Администратор: **{admin_name}**"
+    )
+    await bot.send_message(message.chat.id, msg_text, parse_mode="Markdown")
 
 # ----------------- 5. ФИЛЬТРЫ ВХОДЯЩИХ СООБЩЕНИЙ -----------------
 
