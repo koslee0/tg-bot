@@ -215,7 +215,7 @@ async def show_rules(message: types.Message):
     if not rules_text:
         await message.reply("В этом чате еще не установлены правила. Администратор может задать их командой /setrules.")
         return
-    await message.answer(f"<b>📜 Правила чата:</b>\n\n{rules_text}")
+    await message.answer(f"<b>Правила чата:</b>\n\n{rules_text}")
 
 @dp.message(Command("setrules"))
 async def set_rules(message: types.Message, command: CommandObject):
@@ -233,7 +233,7 @@ async def set_rules(message: types.Message, command: CommandObject):
 
     STORAGE["rules"][chat_id] = rules_text
     save_data()
-    await message.reply("✅ Правила этого чата успешно обновлены!")
+    await message.reply("Правила этого чата успешно обновлены.")
 
 # ----------------- УПРАВЛЕНИЕ СТАФФОМ (/staff, ролями) -----------------
 
@@ -243,27 +243,41 @@ async def list_staff(message: types.Message):
     admins = STORAGE["admins"].get(chat_id, [])
     moderators = STORAGE["moderators"].get(chat_id, [])
 
-    text = "👥 <b>Состав стаффа чата:</b>\n\n"
-    text += "👑 <b>Владелец:</b> Создатель группы\n"
+    text = "<b>Состав стаффа чата:</b>\n\n"
+    text += "<b>Владелец:</b> Создатель группы\n"
     
-    text += "🛡️ <b>Администраторы:</b>\n"
+    text += "\n<b>Администраторы:</b>\n"
     if admins:
-        text += "\n".join([f"• ID: <code>{uid}</code>" for uid in admins]) + "\n"
+        for uid in admins:
+            try:
+                member = await bot.get_chat_member(chat_id, uid)
+                user = member.user
+                name = f"@{user.username}" if user.username else user.first_name
+                text += f"- {mention(uid, name)}\n"
+            except Exception:
+                text += f"- ID: <code>{uid}</code>\n"
     else:
-        text += "• Отсутствуют\n"
+        text += "- Отсутствуют\n"
 
-    text += "\n⚔️ <b>Модераторы:</b>\n"
+    text += "\n<b>Модераторы:</b>\n"
     if moderators:
-        text += "\n".join([f"• ID: <code>{uid}</code>" for uid in moderators])
+        for uid in moderators:
+            try:
+                member = await bot.get_chat_member(chat_id, uid)
+                user = member.user
+                name = f"@{user.username}" if user.username else user.first_name
+                text += f"- {mention(uid, name)}\n"
+            except Exception:
+                text += f"- ID: <code>{uid}</code>\n"
     else:
-        text += "• Отсутствуют"
+        text += "- Отсутствуют"
 
     await message.answer(text)
 
 @dp.message(Command("botadmin"))
 async def add_bot_admin(message: types.Message, command: CommandObject):
     if not await is_creator(message):
-        await message.reply("❌ Только владелец группы может назначать администраторов.")
+        await message.reply("Только владелец группы может назначать администраторов.")
         return
 
     target_id, target_name = await extract_target_user(message, command)
@@ -284,12 +298,12 @@ async def add_bot_admin(message: types.Message, command: CommandObject):
 
     STORAGE["admins"][chat_id].append(target_id)
     save_data()
-    await message.reply(f"✅ Пользователю {mention(target_id, target_name)} успешно присвоена роль <b>Администратора</b>.")
+    await message.reply(f"Пользователю {mention(target_id, target_name)} успешно присвоена роль <b>Администратора</b>.")
 
 @dp.message(Command("unbotadmin"))
 async def remove_bot_admin(message: types.Message, command: CommandObject):
     if not await is_creator(message):
-        await message.reply("❌ Только владелец группы может снимать администраторов.")
+        await message.reply("Только владелец группы может снимать администраторов.")
         return
 
     target_id, target_name = await extract_target_user(message, command)
@@ -301,7 +315,7 @@ async def remove_bot_admin(message: types.Message, command: CommandObject):
     if chat_id in STORAGE["admins"] and target_id in STORAGE["admins"][chat_id]:
         STORAGE["admins"][chat_id].remove(target_id)
         save_data()
-        await message.reply(f"🗑️ Роль Администратора у {mention(target_id, target_name)} отозвана.")
+        await message.reply(f"Роль Администратора у {mention(target_id, target_name)} отозвана.")
     else:
         await message.reply(f"Пользователь {mention(target_id, target_name)} не найден в списке администраторов.")
 
@@ -325,7 +339,7 @@ async def add_bot_moderator(message: types.Message, command: CommandObject):
 
     STORAGE["moderators"][chat_id].append(target_id)
     save_data()
-    await message.reply(f"✅ Пользователю {mention(target_id, target_name)} успешно присвоена роль <b>Модератора</b>.")
+    await message.reply(f"Пользователю {mention(target_id, target_name)} успешно присвоена роль <b>Модератора</b>.")
 
 @dp.message(Command("unbotmoderator"))
 async def remove_bot_moderator(message: types.Message, command: CommandObject):
@@ -341,7 +355,7 @@ async def remove_bot_moderator(message: types.Message, command: CommandObject):
     if chat_id in STORAGE["moderators"] and target_id in STORAGE["moderators"][chat_id]:
         STORAGE["moderators"][chat_id].remove(target_id)
         save_data()
-        await message.reply(f"🗑️ Роль Модератора у {mention(target_id, target_name)} отозвана.")
+        await message.reply(f"Роль Модератора у {mention(target_id, target_name)} отозвана.")
     else:
         await message.reply(f"Пользователь {mention(target_id, target_name)} не найден в списке модераторов.")
 
@@ -509,17 +523,17 @@ async def set_antiflood(message: types.Message, command: CommandObject):
         return
     if not command.args or not command.args.isdigit():
         current = STORAGE["antiflood"].get(message.chat.id, 5)
-        await message.reply(f"ℹ️ Текущий лимит антифлуда: <b>{current} сообщений</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
+        await message.reply(f"Текущий лимит антифлуда: <b>{current} сообщений</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
         return
 
     limit = int(command.args)
     if limit < 2 or limit > 30:
-        await message.reply("❌ Лимит должен быть от 2 до 30 сообщений.")
+        await message.reply("Лимит должен быть от 2 до 30 сообщений.")
         return
 
     STORAGE["antiflood"][message.chat.id] = limit
     save_data()
-    await message.reply(f"✅ Антифлуд успешно установлен на лимит: <b>{limit} сообщений</b>.")
+    await message.reply(f"Антифлуд успешно установлен на лимит: <b>{limit} сообщений</b>.")
 
 # ----------------- МОДЕРАЦИЯ И СИСТЕМА ВАРНОВ -----------------
 
@@ -553,7 +567,7 @@ async def ban_user(message: types.Message, command: CommandObject):
             save_data()
 
         msg_text = (
-            f"🚫 Пользователь {mention(target_id, target_name)} забанен {time_text}!\n"
+            f"Пользователь {mention(target_id, target_name)} забанен {time_text}!\n"
             f"<b>Администратор:</b> {escape(admin_name)}"
         )
         if reason:
@@ -586,7 +600,7 @@ async def kick_user(message: types.Message, command: CommandObject):
             pass
 
         msg_text = (
-            f"👢 Пользователь {mention(target_id, target_name)} изгнан из чата!\n"
+            f"Пользователь {mention(target_id, target_name)} изгнан из чата!\n"
             f"<b>Администратор:</b> {escape(admin_name)}"
         )
         if reason:
@@ -616,7 +630,7 @@ async def unban_user(message: types.Message, command: CommandObject):
             save_data()
 
         msg_text = (
-            f"✅ Пользователь {mention(target_id, target_name)} разбанен!\n"
+            f"Пользователь {mention(target_id, target_name)} разбанен!\n"
             f"<b>Администратор:</b> {escape(admin_name)}"
         )
         await message.answer(msg_text)
@@ -648,7 +662,7 @@ async def mute_user(message: types.Message, command: CommandObject):
         )
 
         msg_text = (
-            f"🔇 Пользователь {mention(target_id, target_name)} замучен на <b>{format_time_rus(time_arg)}</b>!\n"
+            f"Пользователь {mention(target_id, target_name)} замучен на <b>{format_time_rus(time_arg)}</b>!\n"
             f"<b>Администратор:</b> {escape(admin_name)}"
         )
         if reason:
@@ -680,7 +694,7 @@ async def unmute_user(message: types.Message, command: CommandObject):
             permissions=chat.permissions
         )
         msg_text = (
-            f"🔊 С пользователя {mention(target_id, target_name)} сняты ограничения!\n"
+            f"С пользователя {mention(target_id, target_name)} сняты ограничения!\n"
             f"<b>Администратор:</b> {escape(admin_name)}"
         )
         await message.answer(msg_text)
@@ -896,14 +910,14 @@ async def check_messages_and_filters(message: types.Message):
                     await bot.ban_chat_member(chat_id, user_id)
                     STORAGE["warns"][chat_id][user_id] = 0
                     save_data()
-                    await message.answer(f"⚡ Пользователь {mention(user_id, message.from_user.first_name)} забанен за флуд (достигнут лимит 5 варнов).")
+                    await message.answer(f"Пользователь {mention(user_id, message.from_user.first_name)} забанен за флуд (достигнут лимит 5 варнов).")
                 elif current_warns == WARN_MUTE_AT:
                     until_date = datetime.now(timezone.utc) + timedelta(days=1)
                     await bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=False), until_date=until_date)
                     save_data()
-                    await message.answer(f"🔇 Пользователь {mention(user_id, message.from_user.first_name)} замучен на <b>1 день</b> за флуд (3 варна).")
+                    await message.answer(f"Пользователь {mention(user_id, message.from_user.first_name)} замучен на <b>1 день</b> за флуд (3 варна).")
                 else:
-                    await message.answer(f"⚠️ Пользователь {mention(user_id, message.from_user.first_name)} получает предупреждение за флуд ({current_warns}/5). Срок: 1 неделя.")
+                    await message.answer(f"Пользователь {mention(user_id, message.from_user.first_name)} получает предупреждение за флуд ({current_warns}/5). Срок: 1 неделя.")
             except TelegramAPIError:
                 pass
             return
