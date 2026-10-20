@@ -539,7 +539,7 @@ async def set_antiflood(message: types.Message, command: CommandObject):
         return
     if not command.args or not command.args.isdigit():
         current = STORAGE["antiflood"].get(message.chat.id, 5)
-        await message.reply(f"Текущий лимит антифлуда: <b>{current} одинаковых сообщений</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
+        await message.reply(f"Текущий лимит антифлуда: <b>{current} сообщений подряд</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
         return
 
     limit = int(command.args)
@@ -549,7 +549,7 @@ async def set_antiflood(message: types.Message, command: CommandObject):
 
     STORAGE["antiflood"][message.chat.id] = limit
     save_data()
-    await message.reply(f"Антифлуд успешно установлен на лимит: <b>{limit} одинаковых сообщений</b>.")
+    await message.reply(f"Антифлуд успешно установлен на лимит: <b>{limit} сообщений подряд</b>.")
 
 # ----------------- МОДЕРАЦИЯ И СИСТЕМА ВАРНОВ -----------------
 
@@ -900,7 +900,7 @@ async def check_messages_and_filters(message: types.Message):
     user_id = message.from_user.id
     msg_text_raw = message.text.strip()
 
-    # Проверка антифлуда (одинаковые сообщения подряд)
+    # Проверка антифлуда (одинаковые текстовые сообщения подряд за 3 секунды)
     if not await is_staff(message):
         limit = STORAGE["antiflood"].get(chat_id, 5)
         now = time.time()
@@ -909,7 +909,8 @@ async def check_messages_and_filters(message: types.Message):
             FLOOD_TRACKER[chat_id] = {}
         
         user_history = FLOOD_TRACKER[chat_id].get(user_id, [])
-        user_history = [(t, text) for t, text in user_history if now - t < 3.0 and text.lower() == msg_text_raw.lower()]
+        # Очищаем старые сообщения (старше 3 секунд) и проверяем точное совпадение текста без учета регистра
+        user_history = [(t, text) for t, text in user_history if now - t < 3.0 and text.strip().lower() == msg_text_raw.lower()]
         user_history.append((now, msg_text_raw))
         FLOOD_TRACKER[chat_id][user_id] = user_history
 
