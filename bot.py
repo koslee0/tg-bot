@@ -48,7 +48,7 @@ def load_data():
                     "warns": {int(cid): {int(uid): cnt for uid, cnt in u_warns.items() if cnt > 0} for cid, u_warns in data.get("warns", {}).items()},
                     "bans": {int(cid): list(set(b)) for cid, b in data.get("bans", {}).items() if b}
                 }
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             corrupt_path = f"{DB_FILE}.corrupt-{int(time.time())}"
             os.replace(DB_FILE, corrupt_path)
             logging.exception("storage.json поврежден и сохранен как %s", corrupt_path)
@@ -93,7 +93,6 @@ def parse_time(time_str: str) -> timedelta:
     return delta
 
 def format_time_rus(time_str: str) -> str:
-    """Красиво преобразует '7d', '1h' в '7 дней', '1 час' и т.д."""
     match = TIME_RE.fullmatch(time_str.strip())
     if not match:
         return time_str
@@ -207,7 +206,7 @@ def parse_time_and_reason(message: types.Message, command: CommandObject, defaul
 def mention(uid: int, name: str) -> str:
     return f'<a href="tg://user?id={uid}">{escape(name)}</a>'
 
-# ----------------- 1. ПРАВИЛА ЧАТА (/rules, /setrules) -----------------
+# ----------------- ПРАВИЛА ЧАТА (/rules, /setrules) -----------------
 
 @dp.message(Command("rules"))
 async def show_rules(message: types.Message):
@@ -236,18 +235,13 @@ async def set_rules(message: types.Message, command: CommandObject):
     save_data()
     await message.reply("✅ Правила этого чата успешно обновлены!")
 
-# ----------------- 2 & 3 & 4. РОЛИ И СТАФФ (/staff, /botadmin, /botmoderator) -----------------
+# ----------------- УПРАВЛЕНИЕ СТАФФОМ (/staff, ролями) -----------------
 
 @dp.message(Command("staff"))
 async def list_staff(message: types.Message):
     chat_id = message.chat.id
     admins = STORAGE["admins"].get(chat_id, [])
     moderators = STORAGE["moderators"].get(chat_id, [])
-    
-    try:
-        chat_member = await bot.get_chat_member(chat_id, message.chat.id) # для владельца через чат
-    except Exception:
-        pass
 
     text = "👥 <b>Состав стаффа чата:</b>\n\n"
     text += "👑 <b>Владелец:</b> Создатель группы\n"
@@ -269,7 +263,7 @@ async def list_staff(message: types.Message):
 @dp.message(Command("botadmin"))
 async def add_bot_admin(message: types.Message, command: CommandObject):
     if not await is_creator(message):
-        await message.reply("❌ Только владелец группы может назначать администраторов бота.")
+        await message.reply("❌ Только владелец группы может назначать администраторов.")
         return
 
     target_id, target_name = await extract_target_user(message, command)
@@ -281,7 +275,6 @@ async def add_bot_admin(message: types.Message, command: CommandObject):
     if chat_id not in STORAGE["admins"]:
         STORAGE["admins"][chat_id] = []
 
-    # Убираем из модеров, если был там
     if chat_id in STORAGE["moderators"] and target_id in STORAGE["moderators"][chat_id]:
         STORAGE["moderators"][chat_id].remove(target_id)
 
@@ -352,7 +345,161 @@ async def remove_bot_moderator(message: types.Message, command: CommandObject):
     else:
         await message.reply(f"Пользователь {mention(target_id, target_name)} не найден в списке модераторов.")
 
-# ----------------- 6. АНТИФЛУД -----------------
+# ----------------- ФИЛЬТРЫ И АВТООТВЕТЫ -----------------
+
+@dp.message(Command("filter"))
+async def add_filter(message: types.Message, command: CommandObject):
+    if not await is_admin_or_creator(message):
+        return
+
+    if not message.reply_to_message:
+        await message.reply("Ответьте этой командой на сообщение, которое нужно привязать к фильтру.")
+        return
+
+    if not command.args:
+        await message.reply("Укажите ключевое слово после команды.")
+        return
+
+    chat_id = message.chat.id
+    trigger_word = command.args.strip().lower()
+    reply = message.reply_to_message
+
+    if chat_id not in STORAGE["filters"]:
+        STORAGE["filters"][chat_id] = {}
+
+    if reply.animation:
+        STORAGE["filters"][chat_id][trigger_word] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.html_caption}
+    elif reply.sticker:
+        STORAGE["filters"][chat_id][trigger_word] = {"type": "sticker", "file_id": reply.sticker.file_id}
+    elif reply.photo:
+        STORAGE["filters"][chat_id][trigger_word] = {"type": "photo", "file_id": reply.photo[-1].file_id, "caption": reply.html_caption}
+    elif reply.video:
+        STORAGE["filters"][chat_id][trigger_word] = {"type": "video", "file_id": reply.video.file_id, "caption": reply.html_caption}
+    elif reply.voice:
+        STORAGE["filters"][chat_id][trigger_word] = {"type": "voice", "file_id": reply.voice.file_id}
+    elif reply.text:
+        STORAGE["filters"][chat_id][trigger_word] = {"type": "text", "text": reply.html_text}
+    else:
+        await message.reply("Этот тип сообщений не поддерживается.")
+        return
+
+    save_data()
+    await message.reply(f"Сохранён фильтр на слово <b>'{escape(trigger_word)}'</b>.")
+
+@dp.message(Command("stop"))
+async def remove_filter(message: types.Message, command: CommandObject):
+    if not await is_admin_or_creator(message):
+        return
+
+    if not command.args:
+        await message.reply("Укажите ключевое слово, фильтр для которого нужно удалить.")
+        return
+
+    chat_id = message.chat.id
+    trigger_word = command.args.strip().lower()
+
+    if chat_id in STORAGE["filters"] and trigger_word in STORAGE["filters"][chat_id]:
+        del STORAGE["filters"][chat_id][trigger_word]
+        save_data()
+        await message.reply(f"Фильтр <b>'{escape(trigger_word)}'</b> удалён.")
+    else:
+        await message.reply(f"Фильтр <b>'{escape(trigger_word)}'</b> не найден.")
+
+@dp.message(Command("filters"))
+async def list_filters(message: types.Message):
+    chat_id = message.chat.id
+    filters = STORAGE["filters"].get(chat_id, {})
+    if not filters:
+        await message.reply("В этом чате пока нет активных фильтров.")
+        return
+
+    sorted_words = sorted(filters.keys(), key=lambda w: (-len(w), w))
+    lines = ["Список фильтров в чате:", *[f"- {escape(w)}" for w in sorted_words]]
+    await message.reply("\n".join(lines))
+
+# ----------------- ПРИВЕТСТВИЯ (WELCOME) -----------------
+
+async def send_welcome_msg(chat_id: int, user_name: str):
+    welcome_data = STORAGE["welcomes"].get(chat_id)
+    if not welcome_data:
+        return False
+
+    content_type = welcome_data["type"]
+    safe_name = escape(user_name)
+
+    try:
+        if content_type == "text":
+            text = welcome_data["text"].replace("{name}", safe_name).replace("{first_name}", safe_name) if welcome_data.get("text") else f"Привет, {safe_name}!"
+            await bot.send_message(chat_id, text)
+        elif content_type == "animation":
+            caption = welcome_data.get("caption", "").replace("{name}", safe_name).replace("{first_name}", safe_name) if welcome_data.get("caption") else None
+            await bot.send_animation(chat_id, animation=welcome_data["file_id"], caption=caption)
+        elif content_type == "photo":
+            caption = welcome_data.get("caption", "").replace("{name}", safe_name).replace("{first_name}", safe_name) if welcome_data.get("caption") else None
+            await bot.send_photo(chat_id, photo=welcome_data["file_id"], caption=caption)
+        elif content_type == "sticker":
+            await bot.send_sticker(chat_id, sticker=welcome_data["file_id"])
+    except Exception as e:
+        logging.exception("Ошибка при отправке приветствия: %s", e)
+    return True
+
+@dp.message(Command("setwelcome"))
+async def set_welcome(message: types.Message):
+    if not await is_admin_or_creator(message):
+        return
+
+    if not message.reply_to_message:
+        await message.reply("Ответьте этой командой на сообщение, которое должно стать приветствием.")
+        return
+
+    chat_id = message.chat.id
+    reply = message.reply_to_message
+
+    if reply.animation:
+        STORAGE["welcomes"][chat_id] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.html_caption}
+    elif reply.sticker:
+        STORAGE["welcomes"][chat_id] = {"type": "sticker", "file_id": reply.sticker.file_id}
+    elif reply.photo:
+        STORAGE["welcomes"][chat_id] = {"type": "photo", "file_id": reply.photo[-1].file_id, "caption": reply.html_caption}
+    elif reply.text:
+        STORAGE["welcomes"][chat_id] = {"type": "text", "text": reply.html_text}
+    else:
+        await message.reply("Этот тип сообщений не поддерживается.")
+        return
+
+    save_data()
+    await message.reply("Приветствие для новых участников успешно установлено.")
+
+@dp.message(Command("welcome"))
+async def show_welcome(message: types.Message):
+    chat_id = message.chat.id
+    if chat_id not in STORAGE["welcomes"]:
+        await message.reply("В этом чате ещё не установлено приветствие.")
+        return
+
+    await send_welcome_msg(chat_id, message.from_user.first_name)
+
+@dp.message(Command("clearwelcome"))
+async def clear_welcome(message: types.Message):
+    if not await is_admin_or_creator(message):
+        return
+
+    chat_id = message.chat.id
+    if chat_id in STORAGE["welcomes"]:
+        del STORAGE["welcomes"][chat_id]
+        save_data()
+        await message.reply("Приветствие удалено.")
+    else:
+        await message.reply("В этом чате не было установлено приветствие.")
+
+@dp.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
+async def greet_new_members_event(event: ChatMemberUpdated):
+    user = event.new_chat_member.user
+    if user.is_bot:
+        return
+    await send_welcome_msg(event.chat.id, user.first_name)
+
+# ----------------- АНТИФЛУД КОМАНДА -----------------
 
 FLOOD_TRACKER = {}
 
@@ -374,7 +521,7 @@ async def set_antiflood(message: types.Message, command: CommandObject):
     save_data()
     await message.reply(f"✅ Антифлуд успешно установлен на лимит: <b>{limit} сообщений</b>.")
 
-# ----------------- 4 & 5. МОДЕРАЦИЯ И ПРАВА -----------------
+# ----------------- МОДЕРАЦИЯ И СИСТЕМА ВАРНОВ -----------------
 
 @dp.message(Command("ban"))
 async def ban_user(message: types.Message, command: CommandObject):
@@ -712,7 +859,7 @@ async def reset_warns(message: types.Message, command: CommandObject):
     )
     await message.answer(msg_text)
 
-# ----------------- 5 & 6. АНТИФЛУД И ФИЛЬТРЫ -----------------
+# ----------------- ОБРАБОТЧИК СООБЩЕНИЙ (АНТИФЛУД И ФИЛЬТРЫ) -----------------
 
 @dp.message(F.text)
 async def check_messages_and_filters(message: types.Message):
@@ -722,7 +869,7 @@ async def check_messages_and_filters(message: types.Message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    # Проверка антифлуда (если пользователь не администратор стаффа)
+    # Проверка антифлуда (если пользователь не в стаффе)
     if not await is_staff(message):
         limit = STORAGE["antiflood"].get(chat_id, 5)
         now = time.time()
@@ -731,16 +878,13 @@ async def check_messages_and_filters(message: types.Message):
             FLOOD_TRACKER[chat_id] = {}
         
         user_history = FLOOD_TRACKER[chat_id].get(user_id, [])
-        # Очищаем старые сообщения (старше 3 секунд)
         user_history = [t for t in user_history if now - t < 3.0]
         user_history.append(now)
         FLOOD_TRACKER[chat_id][user_id] = user_history
 
         if len(user_history) >= limit:
-            # Сбрасываем историю для этого юзера, чтобы не спамить варнами каждый тик
             FLOOD_TRACKER[chat_id][user_id] = []
             
-            # Выдаем авто-варн за флуд на 1 неделю
             if chat_id not in STORAGE["warns"]:
                 STORAGE["warns"][chat_id] = {}
             current_warns = STORAGE["warns"][chat_id].get(user_id, 0) + 1
