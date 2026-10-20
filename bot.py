@@ -245,7 +245,6 @@ async def list_staff(message: types.Message):
 
     text = "<b>Состав стаффа чата:</b>\n\n"
     
-    # Ищем владельца чата через Telegram API
     owner_str = "Создатель группы"
     try:
         members = await bot.get_chat_administrators(chat_id)
@@ -395,7 +394,11 @@ async def add_filter(message: types.Message, command: CommandObject):
         STORAGE["filters"][chat_id] = {}
 
     if reply.animation:
-        STORAGE["filters"][chat_id][trigger_word] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.html_caption}
+        STORAGE["filters"][chat_id][trigger_word] = {
+            "type": "animation", 
+            "file_id": reply.animation.file_id, 
+            "caption": reply.caption or ""
+        }
     elif reply.sticker:
         STORAGE["filters"][chat_id][trigger_word] = {"type": "sticker", "file_id": reply.sticker.file_id}
     elif reply.photo:
@@ -906,7 +909,6 @@ async def check_messages_and_filters(message: types.Message):
             FLOOD_TRACKER[chat_id] = {}
         
         user_history = FLOOD_TRACKER[chat_id].get(user_id, [])
-        # Очищаем старые (старше 3 секунд) и проверяем совпадение текста
         user_history = [(t, text) for t, text in user_history if now - t < 3.0 and text.lower() == msg_text_raw.lower()]
         user_history.append((now, msg_text_raw))
         FLOOD_TRACKER[chat_id][user_id] = user_history
@@ -957,7 +959,10 @@ async def check_messages_and_filters(message: types.Message):
                 if content_type == "text":
                     await message.reply(content["text"])
                 elif content_type == "animation":
-                    await message.reply_animation(animation=content["file_id"], caption=content.get("caption"))
+                    await message.reply_animation(
+                        animation=content["file_id"], 
+                        caption=content.get("caption") if content.get("caption") else None
+                    )
                 elif content_type == "sticker":
                     await message.reply_sticker(sticker=content["file_id"])
                 elif content_type == "photo":
