@@ -244,7 +244,20 @@ async def list_staff(message: types.Message):
     moderators = STORAGE["moderators"].get(chat_id, [])
 
     text = "<b>Состав стаффа чата:</b>\n\n"
-    text += "<b>Владелец:</b> Создатель группы\n"
+    
+    # Ищем владельца чата через Telegram API
+    owner_str = "Создатель группы"
+    try:
+        members = await bot.get_chat_administrators(chat_id)
+        for m in members:
+            if m.status == "creator":
+                owner_name = f"@{m.user.username}" if m.user.username else m.user.first_name
+                owner_str = mention(m.user.id, owner_name)
+                break
+    except Exception:
+        pass
+
+    text += f"<b>Владелец:</b> {owner_str}\n"
     
     text += "\n<b>Администраторы:</b>\n"
     if admins:
@@ -523,7 +536,7 @@ async def set_antiflood(message: types.Message, command: CommandObject):
         return
     if not command.args or not command.args.isdigit():
         current = STORAGE["antiflood"].get(message.chat.id, 5)
-        await message.reply(f"Текущий лимит антифлуда: <b>{current} сообщений</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
+        await message.reply(f"Текущий лимит антифлуда: <b>{current} одинаковых сообщений</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
         return
 
     limit = int(command.args)
@@ -533,7 +546,7 @@ async def set_antiflood(message: types.Message, command: CommandObject):
 
     STORAGE["antiflood"][message.chat.id] = limit
     save_data()
-    await message.reply(f"Антифлуд успешно установлен на лимит: <b>{limit} сообщений</b>.")
+    await message.reply(f"Антифлуд успешно установлен на лимит: <b>{limit} одинаковых сообщений</b>.")
 
 # ----------------- МОДЕРАЦИЯ И СИСТЕМА ВАРНОВ -----------------
 
@@ -882,8 +895,9 @@ async def check_messages_and_filters(message: types.Message):
 
     chat_id = message.chat.id
     user_id = message.from_user.id
+    msg_text_raw = message.text.strip()
 
-    # Проверка антифлуда (если пользователь не в стаффе)
+    # Проверка антифлуда (одинаковые сообщения подряд)
     if not await is_staff(message):
         limit = STORAGE["antiflood"].get(chat_id, 5)
         now = time.time()
@@ -892,8 +906,9 @@ async def check_messages_and_filters(message: types.Message):
             FLOOD_TRACKER[chat_id] = {}
         
         user_history = FLOOD_TRACKER[chat_id].get(user_id, [])
-        user_history = [t for t in user_history if now - t < 3.0]
-        user_history.append(now)
+        # Очищаем старые (старше 3 секунд) и проверяем совпадение текста
+        user_history = [(t, text) for t, text in user_history if now - t < 3.0 and text.lower() == msg_text_raw.lower()]
+        user_history.append((now, msg_text_raw))
         FLOOD_TRACKER[chat_id][user_id] = user_history
 
         if len(user_history) >= limit:
@@ -927,7 +942,7 @@ async def check_messages_and_filters(message: types.Message):
     if not filters:
         return
 
-    text_lower = message.text.lower()
+    text_lower = msg_text_raw.lower()
     words_in_message = text_lower.split()
 
     for trigger_word, content in filters.items():
