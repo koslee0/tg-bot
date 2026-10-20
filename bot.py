@@ -539,7 +539,7 @@ async def set_antiflood(message: types.Message, command: CommandObject):
         return
     if not command.args or not command.args.isdigit():
         current = STORAGE["antiflood"].get(message.chat.id, 5)
-        await message.reply(f"Текущий лимит антифлуда: <b>{current} сообщений подряд</b> за 3 секунды.\nИзменить: <code>/antiflood [число]</code>")
+        await message.reply(f"Текущий лимит антифлуда: <b>{current} сообщений подряд</b> за короткое время.\nИзменить: <code>/antiflood [число]</code>")
         return
 
     limit = int(command.args)
@@ -900,7 +900,7 @@ async def check_messages_and_filters(message: types.Message):
     user_id = message.from_user.id
     msg_text_raw = message.text.strip()
 
-    # Проверка антифлуда (одинаковые текстовые сообщения подряд за 3 секунды)
+    # Проверка антифлуда (мгновенная проверка одинаковых сообщений подряд)
     if not await is_staff(message):
         limit = STORAGE["antiflood"].get(chat_id, 5)
         now = time.time()
@@ -908,14 +908,17 @@ async def check_messages_and_filters(message: types.Message):
         if chat_id not in FLOOD_TRACKER:
             FLOOD_TRACKER[chat_id] = {}
         
-        user_history = FLOOD_TRACKER[chat_id].get(user_id, [])
-        # Очищаем старые сообщения (старше 3 секунд) и проверяем точное совпадение текста без учета регистра
-        user_history = [(t, text) for t, text in user_history if now - t < 3.0 and text.strip().lower() == msg_text_raw.lower()]
-        user_history.append((now, msg_text_raw))
-        FLOOD_TRACKER[chat_id][user_id] = user_history
+        last_time, last_text, count = FLOOD_TRACKER[chat_id].get(user_id, (0, "", 0))
+        
+        if now - last_time > 5.0 or last_text != msg_text_raw.lower():
+            count = 1
+        else:
+            count += 1
+            
+        FLOOD_TRACKER[chat_id][user_id] = (now, msg_text_raw.lower(), count)
 
-        if len(user_history) >= limit:
-            FLOOD_TRACKER[chat_id][user_id] = []
+        if count >= limit:
+            FLOOD_TRACKER[chat_id][user_id] = (0, "", 0)
             
             if chat_id not in STORAGE["warns"]:
                 STORAGE["warns"][chat_id] = {}
