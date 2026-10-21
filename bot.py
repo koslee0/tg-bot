@@ -46,13 +46,14 @@ def load_data():
                     "rules": {int(cid): r for cid, r in data.get("rules", {}).items() if r},
                     "antiflood": {int(cid): limit for cid, limit in data.get("antiflood", {}).items()},
                     "warns": {int(cid): {int(uid): cnt for uid, cnt in u_warns.items() if cnt > 0} for cid, u_warns in data.get("warns", {}).items()},
-                    "bans": {int(cid): list(set(b)) for cid, b in data.get("bans", {}).items() if b}
+                    "bans": {int(cid): list(set(b)) for cid, b in data.get("bans", {}).items() if b},
+                    "logs": {int(cid): int(log_id) for cid, log_id in data.get("logs", {}).items()}
                 }
         except (json.JSONDecodeError, ValueError):
             corrupt_path = f"{DB_FILE}.corrupt-{int(time.time())}"
             os.replace(DB_FILE, corrupt_path)
             logging.exception("storage.json поврежден и сохранен как %s", corrupt_path)
-    return {"filters": {}, "admins": {}, "moderators": {}, "welcomes": {}, "rules": {}, "antiflood": {}, "warns": {}, "bans": {}}
+    return {"filters": {}, "admins": {}, "moderators": {}, "welcomes": {}, "rules": {}, "antiflood": {}, "warns": {}, "bans": {}, "logs": {}}
 
 def save_data():
     try:
@@ -64,7 +65,8 @@ def save_data():
             "rules": {cid: r for cid, r in STORAGE["rules"].items() if r},
             "antiflood": {cid: limit for cid, limit in STORAGE["antiflood"].items() if limit},
             "warns": {cid: {uid: cnt for uid, cnt in u_warns.items() if cnt > 0} for cid, u_warns in STORAGE["warns"].items() if u_warns},
-            "bans": {cid: list(set(b)) for cid, b in STORAGE["bans"].items() if b}
+            "bans": {cid: list(set(b)) for cid, b in STORAGE["bans"].items() if b},
+            "logs": {cid: log_id for cid, log_id in STORAGE["logs"].items() if log_id}
         }
         tmp_file = DB_FILE + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
@@ -206,6 +208,21 @@ def parse_time_and_reason(message: types.Message, command: CommandObject, defaul
 def mention(uid: int, name: str) -> str:
     return f'<a href="tg://user?id={uid}">{escape(name)}</a>'
 
+def get_admin_mention(user: types.User) -> str:
+    admin_name = f"@{user.username}" if user.username else user.full_name
+    return mention(user.id, admin_name)
+
+async def send_log(chat_id: int, log_text: str):
+    target_log_id = STORAGE["logs"].get(chat_id)
+    if not target_log_id:
+        return
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    full_log = f"<b>Лог модерации</b>\n<b>Время:</b> <code>{now_str}</code>\n\n{log_text}"
+    try:
+        await bot.send_message(target_log_id, full_log)
+    except Exception as e:
+        logging.exception("Ошибка при отправке лога в чат %s: %s", target_log_id, e)
+
 # ----------------- ПРАВИЛА ЧАТА (/rules, /setrules) -----------------
 
 @dp.message(Command("rules"))
@@ -234,6 +251,52 @@ async def set_rules(message: types.Message, command: CommandObject):
     STORAGE["rules"][chat_id] = rules_text
     save_data()
     await message.reply("Правила этого чата успешно обновлены.")
+
+# ----------------- ЧАТ ЛОГОВ (/setlogs, /logs, /clearlogs) -----------------
+
+@dp.message(Command("setlogs"))
+async def set_logs(message: types.Message, command: CommandObject):
+    if not await is_admin_or_creator(message):
+        return
+
+    chat_id = message.chat.id
+    target_log_id = None
+
+    if command and command.args:
+        arg = command.args.split()[0]
+        try:
+            target_log_id = int(arg)
+        except ValueError:
+            await message.reply("Укажите числовой ID чата логов, например: <code>/setlogs -100123456789</code>")
+            return
+    else:
+        target_log_id = chat_id
+
+    STORAGE["logs"][chat_id] = target_log_id
+    save_data()
+    await message.reply(f"Чат для логов успешно установлен: <code>{target_log_id}</code>.")
+
+@dp.message(Command("logs"))
+async def show_logs(message: types.Message):
+    if not await is_admin_or_creator(message):
+        return
+    log_id = STORAGE["logs"].get(message.chat.id)
+    if log_id:
+        await message.reply(f"Текущий чат логов: <code>{log_id}</code>")
+    else:
+        await message.reply("Чат логов не привязан. Установите его командой /setlogs.")
+
+@dp.message(Command("clearlogs"))
+async def clear_logs(message: types.Message):
+    if not await is_admin_or_creator(message):
+        return
+    chat_id = message.chat.id
+    if chat_id in STORAGE["logs"]:
+        del STORAGE["logs"][chat_id]
+        save_data()
+        await message.reply("Логирование для этого чата отключено.")
+    else:
+        await message.reply("Чат логов не был установлен.")
 
 # ----------------- УПРАВЛЕНИЕ СТАФФОМ (/staff, ролями) -----------------
 
@@ -563,7 +626,7 @@ async def ban_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
     time_arg, reason = parse_time_and_reason(message, command)
 
     try:
@@ -584,12 +647,13 @@ async def ban_user(message: types.Message, command: CommandObject):
 
         msg_text = (
             f"Пользователь {mention(target_id, target_name)} забанен {time_text}!\n"
-            f"<b>Администратор:</b> {escape(admin_name)}"
+            f"<b>Администратор:</b> {admin_mention}"
         )
         if reason:
             msg_text += f"\n<b>Причина:</b> {escape(reason)}"
 
         await message.answer(msg_text)
+        await send_log(chat_id, msg_text)
     except ValueError as e:
         await message.reply(str(e))
     except TelegramAPIError as e:
@@ -605,7 +669,7 @@ async def kick_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
     _, reason = parse_time_and_reason(message, command)
 
     try:
@@ -617,12 +681,13 @@ async def kick_user(message: types.Message, command: CommandObject):
 
         msg_text = (
             f"Пользователь {mention(target_id, target_name)} изгнан из чата!\n"
-            f"<b>Администратор:</b> {escape(admin_name)}"
+            f"<b>Администратор:</b> {admin_mention}"
         )
         if reason:
             msg_text += f"\n<b>Причина:</b> {escape(reason)}"
 
         await message.answer(msg_text)
+        await send_log(message.chat.id, msg_text)
     except TelegramAPIError as e:
         await message.answer(f"Не удалось кикнуть пользователя: {e}")
 
@@ -636,7 +701,7 @@ async def unban_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
 
     try:
         await bot.unban_chat_member(message.chat.id, target_id)
@@ -647,9 +712,10 @@ async def unban_user(message: types.Message, command: CommandObject):
 
         msg_text = (
             f"Пользователь {mention(target_id, target_name)} разбанен!\n"
-            f"<b>Администратор:</b> {escape(admin_name)}"
+            f"<b>Администратор:</b> {admin_mention}"
         )
         await message.answer(msg_text)
+        await send_log(chat_id, msg_text)
     except TelegramAPIError as e:
         await message.answer(f"Ошибка при разбане: {e}")
 
@@ -663,7 +729,7 @@ async def mute_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
     time_arg, reason = parse_time_and_reason(message, command, default_time="1h")
 
     try:
@@ -679,12 +745,13 @@ async def mute_user(message: types.Message, command: CommandObject):
 
         msg_text = (
             f"Пользователь {mention(target_id, target_name)} замучен на <b>{format_time_rus(time_arg)}</b>!\n"
-            f"<b>Администратор:</b> {escape(admin_name)}"
+            f"<b>Администратор:</b> {admin_mention}"
         )
         if reason:
             msg_text += f"\n<b>Причина:</b> {escape(reason)}"
 
         await message.answer(msg_text)
+        await send_log(message.chat.id, msg_text)
     except ValueError as e:
         await message.reply(str(e))
     except TelegramAPIError as e:
@@ -700,7 +767,7 @@ async def unmute_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
 
     try:
         chat = await bot.get_chat(message.chat.id)
@@ -711,9 +778,10 @@ async def unmute_user(message: types.Message, command: CommandObject):
         )
         msg_text = (
             f"С пользователя {mention(target_id, target_name)} сняты ограничения!\n"
-            f"<b>Администратор:</b> {escape(admin_name)}"
+            f"<b>Администратор:</b> {admin_mention}"
         )
         await message.answer(msg_text)
+        await send_log(message.chat.id, msg_text)
     except TelegramAPIError as e:
         await message.answer(f"Ошибка при снятии мута: {e}")
 
@@ -727,7 +795,7 @@ async def warn_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
     time_arg, reason = parse_time_and_reason(message, command, default_time="7d")
     
     try:
@@ -756,13 +824,14 @@ async def warn_user(message: types.Message, command: CommandObject):
 
             msg_text = (
                 f"Пользователь {mention(target_id, target_name)} получил <b>5/5</b> предупреждений и забанен навсегда!\n"
-                f"<b>Администратор:</b> {escape(admin_name)}\n"
-                f"варнов до мута: 3/3\n"
-                f"варнов до бана: 5/5"
+                f"<b>Администратор:</b> {admin_mention}\n"
+                f"предупреждений до мута: 3/3\n"
+                f"предупреждений до бана: 5/5"
             )
             if reason:
                 msg_text += f"\n<b>Причина:</b> {escape(reason)}"
             await message.answer(msg_text)
+            await send_log(chat_id, msg_text)
             return
 
         elif current_warns == WARN_MUTE_AT:
@@ -778,13 +847,14 @@ async def warn_user(message: types.Message, command: CommandObject):
 
             msg_text = (
                 f"Пользователь {mention(target_id, target_name)} получил <b>3/5</b> предупреждений и замучен на <b>1 день</b>!\n"
-                f"<b>Администратор:</b> {escape(admin_name)}\n"
-                f"варнов до мута: 3/3\n"
-                f"варнов до бана: 3/5"
+                f"<b>Администратор:</b> {admin_mention}\n"
+                f"предупреждений до мута: 3/3\n"
+                f"предупреждений до бана: 3/5"
             )
             if reason:
                 msg_text += f"\n<b>Причина:</b> {escape(reason)}"
             await message.answer(msg_text)
+            await send_log(chat_id, msg_text)
             return
 
         else:
@@ -793,14 +863,15 @@ async def warn_user(message: types.Message, command: CommandObject):
 
             msg_text = (
                 f"Пользователю {mention(target_id, target_name)} выдано предупреждение.\n"
-                f"<b>Администратор:</b> {escape(admin_name)}\n"
-                f"варнов до мута: {progress_mute}/3\n"
-                f"варнов до бана: {progress_ban}/5\n"
+                f"<b>Администратор:</b> {admin_mention}\n"
+                f"предупреждений до мута: {progress_mute}/3\n"
+                f"предупреждений до бана: {progress_ban}/5\n"
                 f"Срок действия: {format_time_rus(time_arg)}"
             )
             if reason:
                 msg_text += f"\n<b>Причина:</b> {escape(reason)}"
             await message.answer(msg_text)
+            await send_log(chat_id, msg_text)
 
     except TelegramAPIError as e:
         await message.answer(f"Не удалось применить наказание: {e}")
@@ -815,7 +886,7 @@ async def unwarn_user(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
     chat_id = message.chat.id
     current_warns = STORAGE["warns"].get(chat_id, {}).get(target_id, 0)
 
@@ -834,11 +905,12 @@ async def unwarn_user(message: types.Message, command: CommandObject):
 
         msg_text = (
             f"С пользователя {mention(target_id, target_name)} снято предупреждение.\n"
-            f"<b>Администратор:</b> {escape(admin_name)}\n"
-            f"варнов до мута: {progress_mute}/3\n"
-            f"варнов до бана: {progress_ban}/5"
+            f"<b>Администратор:</b> {admin_mention}\n"
+            f"предупреждений до мута: {progress_mute}/3\n"
+            f"предупреждений до бана: {progress_ban}/5"
         )
         await message.answer(msg_text)
+        await send_log(chat_id, msg_text)
     else:
         await message.reply(f"У пользователя {mention(target_id, target_name)} нет активных предупреждений.")
 
@@ -860,8 +932,8 @@ async def check_warns(message: types.Message, command: CommandObject):
 
     msg_text = (
         f"Количество предупреждений у пользователя {mention(target_id, target_name)}:\n"
-        f"варнов до мута: {progress_mute}/3\n"
-        f"варнов до бана: {progress_ban}/5"
+        f"предупреждений до мута: {progress_mute}/3\n"
+        f"предупреждений до бана: {progress_ban}/5"
     )
     await message.answer(msg_text)
 
@@ -875,7 +947,7 @@ async def reset_warns(message: types.Message, command: CommandObject):
         await message.reply("Ответьте на сообщение пользователя или укажите его ID.")
         return
 
-    admin_name = message.from_user.first_name
+    admin_mention = get_admin_mention(message.from_user)
     chat_id = message.chat.id
     if chat_id in STORAGE["warns"] and target_id in STORAGE["warns"][chat_id]:
         del STORAGE["warns"][chat_id][target_id]
@@ -885,9 +957,10 @@ async def reset_warns(message: types.Message, command: CommandObject):
 
     msg_text = (
         f"Предупреждения пользователя {mention(target_id, target_name)} сброшены.\n"
-        f"<b>Администратор:</b> {escape(admin_name)}"
+        f"<b>Администратор:</b> {admin_mention}"
     )
     await message.answer(msg_text)
+    await send_log(chat_id, msg_text)
 
 # ----------------- ОБРАБОТЧИК СООБЩЕНИЙ (АНТИФЛУД И ФИЛЬТРЫ) -----------------
 
@@ -931,14 +1004,20 @@ async def check_messages_and_filters(message: types.Message):
                     await bot.ban_chat_member(chat_id, user_id)
                     STORAGE["warns"][chat_id][user_id] = 0
                     save_data()
-                    await message.answer(f"Пользователь {mention(user_id, message.from_user.first_name)} забанен за флуд (достигнут лимит 5 варнов).")
+                    log_msg = f"Пользователь {mention(user_id, message.from_user.first_name)} забанен за флуд (достигнут лимит 5 варнов)."
+                    await message.answer(log_msg)
+                    await send_log(chat_id, log_msg)
                 elif current_warns == WARN_MUTE_AT:
                     until_date = datetime.now(timezone.utc) + timedelta(days=1)
                     await bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=False), until_date=until_date)
                     save_data()
-                    await message.answer(f"Пользователь {mention(user_id, message.from_user.first_name)} замучен на <b>1 день</b> за флуд (3 варна).")
+                    log_msg = f"Пользователь {mention(user_id, message.from_user.first_name)} замучен на <b>1 день</b> за флуд (3 варна)."
+                    await message.answer(log_msg)
+                    await send_log(chat_id, log_msg)
                 else:
-                    await message.answer(f"Пользователь {mention(user_id, message.from_user.first_name)} получает предупреждение за флуд ({current_warns}/5). Срок: 1 неделя.")
+                    log_msg = f"Пользователь {mention(user_id, message.from_user.first_name)} получает предупреждение за флуд ({current_warns}/5). Срок: 1 неделя."
+                    await message.answer(log_msg)
+                    await send_log(chat_id, log_msg)
             except TelegramAPIError:
                 pass
             return
