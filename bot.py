@@ -465,9 +465,17 @@ async def add_filter(message: types.Message, command: CommandObject):
     elif reply.sticker:
         STORAGE["filters"][chat_id][trigger_word] = {"type": "sticker", "file_id": reply.sticker.file_id}
     elif reply.photo:
-        STORAGE["filters"][chat_id][trigger_word] = {"type": "photo", "file_id": reply.photo[-1].file_id, "caption": reply.html_caption}
+        STORAGE["filters"][chat_id][trigger_word] = {
+            "type": "photo", 
+            "file_id": reply.photo[-1].file_id, 
+            "caption": reply.caption or ""
+        }
     elif reply.video:
-        STORAGE["filters"][chat_id][trigger_word] = {"type": "video", "file_id": reply.video.file_id, "caption": reply.html_caption}
+        STORAGE["filters"][chat_id][trigger_word] = {
+            "type": "video", 
+            "file_id": reply.video.file_id, 
+            "caption": reply.caption or ""
+        }
     elif reply.voice:
         STORAGE["filters"][chat_id][trigger_word] = {"type": "voice", "file_id": reply.voice.file_id}
     elif reply.text:
@@ -549,11 +557,11 @@ async def set_welcome(message: types.Message):
     reply = message.reply_to_message
 
     if reply.animation:
-        STORAGE["welcomes"][chat_id] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.html_caption}
+        STORAGE["welcomes"][chat_id] = {"type": "animation", "file_id": reply.animation.file_id, "caption": reply.caption or ""}
     elif reply.sticker:
         STORAGE["welcomes"][chat_id] = {"type": "sticker", "file_id": reply.sticker.file_id}
     elif reply.photo:
-        STORAGE["welcomes"][chat_id] = {"type": "photo", "file_id": reply.photo[-1].file_id, "caption": reply.html_caption}
+        STORAGE["welcomes"][chat_id] = {"type": "photo", "file_id": reply.photo[-1].file_id, "caption": reply.caption or ""}
     elif reply.text:
         STORAGE["welcomes"][chat_id] = {"type": "text", "text": reply.html_text}
     else:
@@ -1049,9 +1057,15 @@ async def check_messages_and_filters(message: types.Message):
                 elif content_type == "sticker":
                     await message.reply_sticker(sticker=content["file_id"])
                 elif content_type == "photo":
-                    await message.reply_photo(photo=content["file_id"], caption=content.get("caption"))
+                    await message.reply_photo(
+                        photo=content["file_id"], 
+                        caption=content.get("caption") if content.get("caption") else None
+                    )
                 elif content_type == "video":
-                    await message.reply_video(video=content["file_id"], caption=content.get("caption"))
+                    await message.reply_video(
+                        video=content["file_id"], 
+                        caption=content.get("caption") if content.get("caption") else None
+                    )
                 elif content_type == "voice":
                     await message.reply_voice(voice=content["file_id"])
             except TelegramAPIError:
