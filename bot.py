@@ -18,14 +18,15 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
-    raise SystemExit("Переменная окружения BOT_TOKEN не задана")
+    raise SystemExit("Переменная окружения BOT_TOKEN или TELEGRAM_BOT_TOKEN не задана")
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+# Универсальный путь для данных: если папки нет, сохраняем прямо в директории бота
+DATA_DIR = os.getenv("DATA_DIR", ".")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(DATA_DIR, "storage.json")
 
