@@ -18,6 +18,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 
+# Поддержка токена с хостинга (проверяет и BOT_TOKEN, и TELEGRAM_BOT_TOKEN)
 TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise SystemExit("Переменная окружения BOT_TOKEN или TELEGRAM_BOT_TOKEN не задана")
@@ -25,8 +26,8 @@ if not TOKEN:
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Универсальный путь для данных: если папки нет, сохраняем прямо в директории бота
-DATA_DIR = os.getenv("DATA_DIR", ".")
+# Надежный путь для базы данных с учетом ограничений хостинга
+DATA_DIR = os.getenv("DATA_DIR", "/tmp")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(DATA_DIR, "storage.json")
 
@@ -982,7 +983,7 @@ async def check_messages_and_filters(message: types.Message):
     user_id = message.from_user.id
     msg_text_raw = message.text.strip()
 
-    # Проверка антифлуда (мгновенная проверка одинаковых сообщений подряд)
+    # Проверка антифлуда
     if not await is_staff(message):
         limit = STORAGE["antiflood"].get(chat_id, 5)
         now = time.time()
